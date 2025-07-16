@@ -26,7 +26,7 @@ import * as WebBrowser from 'expo-web-browser';
 WebBrowser.maybeCompleteAuthSession();
 
 // Server configuration
-const SERVER_IP = '192.168.4.184';
+const SERVER_IP = '192.168.50.242';
 const ANALYZE_URL = `http://${SERVER_IP}:5000/analyze`;
 const SEARCH_ARTIST_URL = `http://${SERVER_IP}:5000/search_artist`;
 const SEARCH_BY_KEY_URL = `http://${SERVER_IP}:5000/search_by_key`;

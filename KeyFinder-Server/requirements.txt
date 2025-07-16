@@ -1,0 +1,8 @@
+flask
+requests
+firebase-admin
+librosa
+numpy
+lyricsgenius
+#acrcloud-sdk-python
+python-dotenv

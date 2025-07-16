@@ -15,25 +15,38 @@ import base64
 import hmac
 import time
 from acrcloud.recognizer import ACRCloudRecognizer
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv() 
 
 # --- Firebase Initialization ---
 try:
-    cred = credentials.Certificate("serviceAccountKey.json")
+    # Get the path to your key file from the environment variable
+    cred_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
+    
+    if not cred_path:
+        raise ValueError("GOOGLE_APPLICATION_CREDENTIALS environment variable not set.")
+
+    # Initialize the Firebase Admin SDK using the path
+    cred = credentials.Certificate(cred_path)
     firebase_admin.initialize_app(cred)
     db = firestore.client()
     print("Successfully connected to Firebase.")
+
 except Exception as e:
     print(f"!!! FIREBASE CONNECTION FAILED: {e} !!!")
     db = None
 
 # --- API Configurations ---
+# --- API Configurations ---
 ACRCLOUD_CONFIG = {
     'host': 'identify-us-west-2.acrcloud.com',
-    'access_key': 'e499a4fda5313b7b97c0717fa6f7599d',
-    'access_secret': 'JriEPO7KPhM0uXP3F2HzCi6WU3EncLZOzWPS8YnQ',
+    'access_key': os.getenv('ACRCLOUD_ACCESS_KEY'),
+    'access_secret': os.getenv('ACRCLOUD_ACCESS_SECRET'),
     'timeout': 10
 }
-GENIUS_ACCESS_TOKEN = 'SCIVDNWgBuVhdyaswqAYwQsUj8i-IwP_36KMLNHC2lbgRDS_DMO1xABrRUmlMtiF'
+GENIUS_ACCESS_TOKEN = os.getenv('GENIUS_ACCESS_TOKEN')
 
 # Initialize ACRCloud recognizer
 acr = ACRCloudRecognizer(ACRCLOUD_CONFIG)

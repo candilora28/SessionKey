@@ -1,0 +1,16 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Node
+KeyFinder-App/node_modules/
+
+# Secrets - NEVER commit this file
+KeyFinder-Server/.env
+
+# VSCode Editor
+.vscode/
+
+# OS files
+.DS_Store
