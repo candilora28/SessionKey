@@ -8,7 +8,6 @@ from firebase_admin import credentials, firestore
 from collections import Counter
 import librosa
 import numpy as np
-import lyricsgenius
 from datetime import datetime, timedelta
 import hashlib
 import base64
@@ -19,6 +18,9 @@ from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv() 
+
+# Initialize Flask app
+app = Flask(__name__)
 
 # --- Firebase Initialization ---
 try:
@@ -51,12 +53,7 @@ GENIUS_ACCESS_TOKEN = os.getenv('GENIUS_ACCESS_TOKEN')
 # Initialize ACRCloud recognizer
 acr = ACRCloudRecognizer(ACRCLOUD_CONFIG)
 
-# Initialize Genius Client
-try:
-    genius = lyricsgenius.Genius(GENIUS_ACCESS_TOKEN, verbose=False, timeout=20)
-except Exception as e:
-    print(f"Failed to initialize Genius client: {e}")
-    genius = None
+
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -138,40 +135,176 @@ ARTIST_PROFILES = {
 
 # --- Chord Progressions Database ---
 CHORD_PROGRESSIONS = {
-    'A Minor': [
-        'Am - F - C - G',
-        'Am - Dm - G - C', 
-        'Am - F - G - Am',
-        'Am - C - F - G'
-    ],
-    'D Minor': [
-        'Dm - Bb - F - C',
-        'Dm - Gm - C - F',
-        'Dm - Bb - C - Dm',
-        'Dm - F - Bb - C'
-    ],
-    'E Minor': [
-        'Em - C - G - D',
-        'Em - Am - D - G',
-        'Em - C - D - Em',
-        'Em - G - C - D'
-    ],
+    # --- Major Keys ---
     'C Major': [
-        'C - Am - F - G',
-        'C - F - G - Am',
         'C - G - Am - F',
-        'C - Dm - G - C'
+        'C - F - G - C',
+        'C - Am - Dm - G',
+        'C - G/B - Am - G',    
+        'F - C - G - Am'
+    ],
+    'C# Major': [
+        'C# - G# - A#m - F#',
+        'C# - F# - G# - C#',
+        'C# - A#m - D#m - G#',
+        'F# - C# - G# - A#m'
+    ],
+    'D Major': [
+        'D - A - Bm - G',
+        'D - G - A - D',
+        'D - Bm - Em - A',
+        'G - D - A - Bm'
+    ],
+    'D# Major': [
+        'D# - A# - Cm - G#',
+        'D# - G# - A# - D#',
+        'D# - Cm - Fm - A#',
+        'G# - D# - A# - Cm'
+    ],
+    'E Major': [
+        'E - B - C#m - A',
+        'E - A - B - E',
+        'E - C#m - F#m - B',
+        'A - E - B - C#m'
+    ],
+    'F Major': [
+        'F - C - Dm - Bb',
+        'F - Bb - C - F',
+        'F - Dm - Gm - C',
+        'Bb - F - C - Dm'
+    ],
+    'F# Major': [
+        'F# - C# - D#m - B',
+        'F# - B - C# - F#',
+        'F# - D#m - G#m - C#',
+        'B - F# - C# - D#m'
     ],
     'G Major': [
-        'G - Em - C - D',
-        'G - C - D - Em',
         'G - D - Em - C',
-        'G - Am - D - G'
+        'G - C - D - G',
+        'G - Em - Am - D',
+        'C - G - D - Em'
+    ],
+    'G# Major': [
+        'G# - D# - Fm - C#',
+        'G# - C# - D# - G#',
+        'G# - Fm - A#m - D#',
+        'C# - G# - D# - Fm'
+    ],
+    'A Major': [
+        'A - E - F#m - D',
+        'A - D - E - A',
+        'A - F#m - Bm - E',
+        'D - A - E - F#m'
+    ],
+    'A# Major': [
+        'A# - F - Gm - D#',
+        'A# - D# - F - A#',
+        'A# - Gm - Cm - F',
+        'D# - A# - F - Gm'
+    ],
+    'B Major': [
+        'B - F# - G#m - E',
+        'B - E - F# - B',
+        'B - G#m - C#m - F#',
+        'E - B - F# - G#m'
+    ],
+
+    # --- Minor Keys ---
+    'C Minor': [
+        'Cm - G - G# - D#',
+        'Cm - Fm - G - Cm',
+        'Cm - G# - D# - A#',
+        'Fm - Cm - G - Cm'
+    ],
+    'C# Minor': [
+        'C#m - G# - A - E',
+        'C#m - F#m - G# - C#m',
+        'C#m - A - E - B',
+        'F#m - C#m - G# - C#m'
+    ],
+    'D Minor': [
+        'Dm - A - Bb - F',
+        'Dm - Gm - A - Dm',
+        'Dm - Bb - F - C',
+        'Gm - Dm - A - Dm'
+    ],
+    'D# Minor': [
+        'D#m - A# - B - F#',
+        'D#m - G#m - A# - D#m',
+        'D#m - B - F# - C#',
+        'G#m - D#m - A# - D#m'
+    ],
+    'E Minor': [
+        'Em - Bm - C - G',
+        'Em - Am - B - Em',
+        'Em - C - G - D',
+        'Am - Em - B - Em'
+    ],
+    'F Minor': [
+        'Fm - C - C# - G#',
+        'Fm - A#m - C - Fm',
+        'Fm - C# - G# - D#',
+        'A#m - Fm - C - Fm'
+    ],
+    'F# Minor': [
+        'F#m - C# - D - A',
+        'F#m - Bm - C# - F#m',
+        'F#m - D - A - E',
+        'Bm - F#m - C# - F#m'
+    ],
+    'G Minor': [
+        'Gm - D - D# - A#',
+        'Gm - Cm - D - Gm',
+        'Gm - D# - A# - F',
+        'Cm - Gm - D - Gm'
+    ],
+    'G# Minor': [
+        'G#m - D# - E - B',
+        'G#m - C#m - D# - G#m',
+        'G#m - E - B - F#',
+        'C#m - G#m - D# - G#m'
+    ],
+    'A Minor': [
+        'Am - G - C - F',
+        'Am - F - C - G',
+        'Am - Dm - E - Am',
+        'F - C - G - Am'
+    ],
+    'A# Minor': [
+        'A#m - F - F# - C#',
+        'A#m - D#m - F - A#m',
+        'A#m - F# - C# - G#',
+        'D#m - A#m - F - A#m'
+    ],
+    'B Minor': [
+        'Bm - F# - G - D',
+        'Bm - Em - F# - Bm',
+        'Bm - G - D - A',
+        'Em - Bm - F# - Bm'
     ]
 }
 
 # --- Helper Functions ---
 def detect_tempo(y, sr):
+    """Enhanced tempo detection using a more robust algorithm."""
+    try:
+        # Use the more direct and robust tempo estimation function
+        tempo = librosa.feature.tempo(y=y, sr=sr)
+
+        # tempo is an array, take the first element
+        tempo = float(tempo[0])
+
+        # Your octave adjustment logic is great, keep it!
+        if tempo > 200:
+            tempo = tempo / 2
+        elif tempo < 60:
+            tempo = tempo * 2
+
+        return int(np.round(tempo))
+    except Exception as e:
+        print(f"Tempo detection error: {e}")
+        return 120  # Default BPM
     """Enhanced tempo detection with multiple methods for accuracy."""
     try:
         # Method 1: Standard beat tracking
@@ -257,6 +390,67 @@ def detect_key(y, sr):
         return "C Major", 0, [], "A Minor"
 
 def analyze_audio_locally(file_path):
+    """Enhanced audio analysis with HPSS for better key detection."""
+    try:
+        # Load audio
+        y, sr = librosa.load(file_path, sr=22050, mono=True)
+        y, _ = librosa.effects.trim(y, top_db=20)
+        
+        # --- NEW: Separate harmonic and percussive components ---
+        y_harmonic, _ = librosa.effects.hpss(y)
+        # --- -------------------------------------------------- ---
+        
+        # Check if audio is valid
+        if len(y_harmonic) < sr * 2:  # At least 2 seconds
+            return {"error": "Audio clip too short or lacks harmonic content"}
+        
+        if np.max(np.abs(y)) < 1e-5:
+            return {"error": "Audio appears to be silent or too quiet"}
+        
+        # Analyze tempo using the full signal
+        bpm = detect_tempo(y, sr)
+        
+        # Analyze key using ONLY the harmonic part for better accuracy
+        key, confidence, alternatives, relative_key = detect_key(y_harmonic, sr)
+        
+        # --- The rest of your function remains exactly the same ---
+        
+        # Try to identify the song using ACRCloud
+        song_info = identify_song_acrcloud(file_path)
+        
+        result = {
+            'key': key,
+            'key_confidence': round(confidence, 1),
+            'bpm': bpm,
+            'alternative_keys': alternatives,
+            'relative_key': relative_key,
+            'chord_progressions': CHORD_PROGRESSIONS.get(key, []),
+            'analysis_timestamp': datetime.now().isoformat()
+        }
+        
+        # Add song identification if found
+        if song_info and song_info.get('status') == 'success':
+            result.update({
+                'status': 'recognized',
+                'title': song_info.get('title'),
+                'artist': song_info.get('artist'),
+                'album': song_info.get('album'),
+                'release_date': song_info.get('release_date'),
+                'spotify_url': song_info.get('spotify_url'),
+                'cover_art_url': song_info.get('cover_art_url')
+            })
+        else:
+            result['status'] = 'not_recognized'
+        
+        # Save analysis to Firebase for database building
+        if db:
+            save_analysis_to_firebase(result)
+        
+        return result
+        
+    except Exception as e:
+        print(f"Analysis error: {e}")
+        return {"error": f"Analysis failed: {str(e)}"}
     """Enhanced audio analysis with better error handling."""
     try:
         # Load audio
@@ -425,31 +619,6 @@ def get_enhanced_artist_analysis(artist_name):
             profile['source'] = 'curated'
             return {'success': True, 'data': profile}
         
-        # Try Genius API
-        if genius:
-            artist = genius.search_artist(artist_name, max_songs=15, sort='popularity')
-            if artist:
-                # Analyze artist's songs for patterns
-                songs_data = []
-                for song in artist.songs[:10]:  # Analyze top 10 songs
-                    songs_data.append({
-                        'title': song.title,
-                        'artist': song.artist
-                    })
-                
-                # This would ideally include analysis of each song
-                # For now, return basic Genius data
-                return {
-                    'success': True,
-                    'data': {
-                        'most_used_keys': ['Analysis needed'],
-                        'bpm_range': {'min': 80, 'max': 140, 'avg': 110},
-                        'preferred_genres': ['Unknown'],
-                        'top_songs': songs_data,
-                        'source': 'genius_api'
-                    }
-                }
-        
         return {'success': False, 'error': 'Artist not found'}
         
     except Exception as e:
@@ -548,7 +717,6 @@ def health_check():
         'status': 'healthy',
         'services': {
             'firebase': db is not None,
-            'genius': genius is not None,
             'acrcloud': True
         }
     })

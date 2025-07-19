@@ -22,6 +22,9 @@ import RNPickerSelect from 'react-native-picker-select';
 import KeyWheel from './KeyWheel';
 import * as AuthSession from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
+import DropboxBrowser from './DropboxBrowser';
+import DropboxFolderPicker from './DropboxFolderPicker';
+
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -35,6 +38,7 @@ const CHORD_PROGRESSIONS_URL = `http://${SERVER_IP}:5000/get_chord_progressions`
 // --- Dropbox Configuration ---
 const DROPBOX_APP_KEY = '1qfdizul5aujvge';
 const redirectUri = AuthSession.makeRedirectUri({ useProxy: true });
+
 
 // --- Reusable Components ---
 const Keyboard = ({ detectedKey }) => {
@@ -99,122 +103,7 @@ const WaveformAnimation = () => {
   );
 };
 
-// --- FIX: Moved DropboxFolderPicker before NewSessionScreen ---
-const DropboxFolderPicker = ({ visible, onClose, onSelectFolder, dropboxAuth }) => {
-    const [currentPath, setCurrentPath] = useState('');
-    const [items, setItems] = useState([]);
-    const [isLoading, setIsLoading] = useState(false);
 
-    const fetchItems = async (path) => {
-        if (!dropboxAuth?.token) return;
-        setIsLoading(true);
-        try {
-            const response = await fetch('https://api.dropboxapi.com/2/files/list_folder', {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${dropboxAuth.token}`,
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ path: path === '/' ? '' : path }),
-            });
-            const data = await response.json();
-            if (data.entries) {
-                const audioExtensions = ['.wav', '.mp3', '.aiff', '.m4a'];
-                const filteredItems = data.entries.filter(entry => 
-                    entry['.tag'] === 'folder' || audioExtensions.some(ext => entry.name.toLowerCase().endsWith(ext))
-                );
-                setItems(filteredItems);
-            }
-        } catch (e) {
-            console.error("Failed to fetch Dropbox items:", e);
-        } finally {
-            setIsLoading(false);
-        }
-    };
-
-    const handlePlayFile = async (filePath) => {
-        try {
-            const response = await fetch('https://api.dropboxapi.com/2/sharing/create_shared_link_with_settings', {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${dropboxAuth.token}`,
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ path: filePath }),
-            });
-            let data = await response.json();
-            if (data.error && data.error['.tag'] === 'shared_link_already_exists') {
-                const listResponse = await fetch('https://api.dropboxapi.com/2/sharing/list_shared_links', {
-                    method: 'POST',
-                    headers: { 'Authorization': `Bearer ${dropboxAuth.token}`, 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ path: filePath, direct_only: true }),
-                });
-                data = await listResponse.json();
-                if(!data.links || data.links.length === 0) throw new Error("Could not retrieve existing link.");
-            }
-            const directUrl = data.links ? data.links[0].url.replace('www.dropbox.com', 'dl.dropboxusercontent.com') : data.url.replace('www.dropbox.com', 'dl.dropboxusercontent.com');
-            Linking.openURL(directUrl);
-        } catch (e) {
-            console.error("Failed to create shareable link:", e);
-            alert('Could not play this file.');
-        }
-    };
-
-    useEffect(() => {
-        if (visible) {
-            fetchItems(currentPath);
-        }
-    }, [visible, currentPath]);
-
-    const navigateTo = (path) => {
-        setCurrentPath(path);
-    };
-
-    const goUp = () => {
-        if (currentPath === '') return;
-        const parentPath = currentPath.substring(0, currentPath.lastIndexOf('/'));
-        setCurrentPath(parentPath);
-    };
-
-    const renderItem = ({ item }) => {
-        const isFolder = item['.tag'] === 'folder';
-        return (
-            <TouchableOpacity style={styles.folderItem} onPress={() => isFolder ? navigateTo(item.path_lower) : handlePlayFile(item.path_lower)}>
-                <MaterialCommunityIcons name={isFolder ? "folder" : "music-box"} size={24} color={isFolder ? "#0061FF" : "#FFFFFF"} style={styles.menuIcon} />
-                <Text style={styles.folderName}>{item.name}</Text>
-            </TouchableOpacity>
-        );
-    };
-
-    return (
-        <Modal animationType="slide" transparent={true} visible={visible} onRequestClose={onClose}>
-            <View style={styles.modalContainer}>
-                <View style={styles.modalContent}>
-                    <Text style={styles.modalTitle}>Select a Dropbox Folder</Text>
-                    <View style={styles.folderNavBar}>
-                        <TouchableOpacity onPress={goUp} disabled={currentPath === ''}>
-                            <MaterialCommunityIcons name="arrow-up-bold-box-outline" size={28} color={currentPath === '' ? "#444" : "#FFFFFF"} />
-                        </TouchableOpacity>
-                        <Text style={styles.currentPathText} numberOfLines={1}>{currentPath === '' ? 'Root Folder' : currentPath}</Text>
-                        <TouchableOpacity style={styles.selectFolderButton} onPress={() => onSelectFolder({ name: currentPath.split('/').pop() || 'Root', path: currentPath })}>
-                            <Text style={styles.selectFolderButtonText}>Select</Text>
-                        </TouchableOpacity>
-                    </View>
-                    {isLoading ? <ActivityIndicator color="#FFFFFF" /> : (
-                        <FlatList
-                            data={items}
-                            keyExtractor={(item) => item.id}
-                            renderItem={renderItem}
-                        />
-                    )}
-                    <TouchableOpacity style={styles.closeButton} onPress={onClose}>
-                        <Text style={styles.closeButtonText}>Close</Text>
-                    </TouchableOpacity>
-                </View>
-            </View>
-        </Modal>
-    );
-};
 
 
 // --- Screen Components ---
@@ -261,10 +150,15 @@ const NewSessionScreen = ({ navigate, appState, setAppState }) => {
     const [error, setError] = useState('');
     const [isFolderPickerVisible, setFolderPickerVisible] = useState(false);
 
+    // NEW STATE: To store the path of the folder selected for browsing its content
+    const [isContentBrowserVisible, setIsContentBrowserVisible] = useState(false);
+    const [selectedBrowseFolderPath, setSelectedBrowseFolderPath] = useState('');
+
+
     const [request, response, promptAsync] = AuthSession.useAuthRequest(
         {
             clientId: DROPBOX_APP_KEY,
-            scopes: ['files.metadata.read', 'sharing.write'],
+            scopes: ['files.metadata.read', 'files.content.read', 'sharing.write'], // Ensure content.read is here
             responseType: 'token',
             redirectUri,
             usePKCE: false,
@@ -293,7 +187,7 @@ const NewSessionScreen = ({ navigate, appState, setAppState }) => {
             const data = await res.json();
             const displayName = data?.name?.display_name || 'Dropbox User';
             setAppState(prevState => ({ ...prevState, dropboxAuth: { token, name: displayName } }));
-            setFolderPickerVisible(true);
+            setFolderPickerVisible(true); // Open folder picker after auth
         } catch (e) {
             setError('Failed to fetch Dropbox user info.');
         }
@@ -301,15 +195,18 @@ const NewSessionScreen = ({ navigate, appState, setAppState }) => {
 
     const handleDropboxLink = () => {
         if (appState.dropboxAuth) {
-            setFolderPickerVisible(true);
+            setFolderPickerVisible(true); // Open folder picker if already auth
         } else {
-            promptAsync();
+            promptAsync(); // Start OAuth flow
         }
     };
-    
+
     const handleSelectFolder = (folder) => {
         setAppState(prevState => ({ ...prevState, selectedFolder: folder }));
-        setFolderPickerVisible(false);
+        setFolderPickerVisible(false); // Close initial folder picker
+        setSelectedBrowseFolderPath(folder.path_lower); // Set the path for the content browser
+        // *** MODIFIED: Set content browser visible when a folder is selected ***
+        setIsContentBrowserVisible(true); // Automatically show browser after selecting folder
     };
 
     const handleArtistSearch = async () => {
@@ -336,15 +233,20 @@ const NewSessionScreen = ({ navigate, appState, setAppState }) => {
         }
     };
 
+
     return (
         <>
-            <DropboxFolderPicker 
+            {/* 1. Dropbox Folder Picker Modal (UNCHANGED - it's still a modal for initial selection) */}
+            <DropboxFolderPicker
                 visible={isFolderPickerVisible}
                 onClose={() => setFolderPickerVisible(false)}
                 onSelectFolder={handleSelectFolder}
                 dropboxAuth={appState.dropboxAuth}
             />
+
+            {/* Main Content Area: A ScrollView to contain everything */}
             <ScrollView style={styles.featureScreenContainer} contentContainerStyle={styles.featureScreenContent}>
+                {/* Top Section: Session Details Inputs */}
                 <Text style={styles.featureTitle}>New Session</Text>
                 <View style={styles.inputGroup}>
                     <Text style={styles.inputLabel}>Artist Name</Text>
@@ -373,15 +275,48 @@ const NewSessionScreen = ({ navigate, appState, setAppState }) => {
                     <Text style={styles.inputLabel}>Session Notes</Text>
                     <TextInput placeholder="e.g., Artist wants dark trap beats, 140-150bpm..." placeholderTextColor="#888" style={[styles.inputField, { height: 120, textAlignVertical: 'top' }]} value={sessionNotes} onChangeText={setSessionNotes} multiline/>
                 </View>
+
                 <View style={styles.inputGroup}>
                     <Text style={styles.inputLabel}>Dropbox Folder</Text>
-                    <TouchableOpacity style={appState.dropboxAuth ? styles.dropboxButtonLinked : styles.dropboxButton} onPress={handleDropboxLink} disabled={!request}>
+                    <TouchableOpacity
+                        style={appState.dropboxAuth ? styles.dropboxButtonLinked : styles.dropboxButton}
+                        onPress={handleDropboxLink}
+                        disabled={!request}
+                    >
                         <MaterialCommunityIcons name="dropbox" size={24} color={appState.dropboxAuth ? "#FFFFFF" : "#0061FF"} style={styles.menuIcon} />
                         <Text style={appState.dropboxAuth ? styles.dropboxButtonTextLinked : styles.dropboxButtonText}>
                             {appState.selectedFolder ? appState.selectedFolder.name : (appState.dropboxAuth ? `Linked as ${appState.dropboxAuth.name}` : 'Link Dropbox Folder')}
                         </Text>
                     </TouchableOpacity>
                 </View>
+
+                {/* --- Conditional Buttons for showing/hiding Dropbox Browser --- */}
+                {appState.selectedFolder && (
+                    <View style={styles.selectedFolderDisplay}>
+                        <Text style={styles.selectedFolderText}>
+                            Current Folder: {appState.selectedFolder.name}
+                        </Text>
+                        <TouchableOpacity
+                            onPress={() => setIsContentBrowserVisible(prev => !prev)} // Toggle visibility
+                            style={styles.toggleBrowseButton} // New style for toggle button
+                        >
+                            <Text style={styles.browseButtonText}>
+                                {isContentBrowserVisible ? 'Hide Files' : 'Browse Files'}
+                            </Text>
+                        </TouchableOpacity>
+                    </View>
+                )}
+
+
+                {/* --- Bottom Section: Embedded Dropbox Browser (Conditional Rendering) --- */}
+                {isContentBrowserVisible && appState.selectedFolder && ( // Render only if toggled visible AND folder selected
+                    <DropboxBrowser
+                        accessToken={appState.dropboxAuth?.token}
+                        initialPath={selectedBrowseFolderPath}
+                        initialFolderName={appState.selectedFolder?.name || 'Selected Folder'}
+                    />
+                )}
+
                 <TouchableOpacity style={styles.primaryButton}><Text style={styles.primaryButtonText}>Save Session</Text></TouchableOpacity>
             </ScrollView>
         </>
@@ -587,18 +522,42 @@ const EnhancedDetectScreen = () => {
     return '#FF453A';
   };
 
+  const setRecordingAudioMode = async (isRecordingActive) => {
+    try {
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: isRecordingActive, // Set true for recording, false for playback
+        playsInSilentModeIOS: true, // Maintain this for overall app behavior
+        shouldDuckAndroid: false, // Maintain this for overall app behavior
+        interruptionModeIOS: Audio.INTERRUPTION_MODE_IOS_DO_NOT_MIX, // Maintain this
+        interruptionModeAndroid: Audio.INTERRUPTION_MODE_ANDROID_DO_NOT_MIX, // Maintain this
+        defaultToSpeaker: true, // Maintain this for desired speaker output
+      });
+      console.log(`DEBUG: Audio mode set for recording: ${isRecordingActive}`);
+    } catch (error) {
+      console.error('DEBUG: Failed to set recording audio mode:', error);
+    }
+  };
+
   const startRecording = async () => {
     try {
       const { status } = await Audio.requestPermissionsAsync();
       if (status !== 'granted') { setError('Microphone permission was not granted.'); return; }
       if (recording) return;
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+
+      // *** Set audio mode for recording BEFORE preparing/starting recording ***
+      await setRecordingAudioMode(true);
+
       const newRecording = new Audio.Recording();
       await newRecording.prepareToRecordAsync(Audio.RECORDING_OPTIONS_PRESET_HIGH_QUALITY);
       await newRecording.startAsync();
       setRecording(newRecording);
       stopTimeoutRef.current = setTimeout(() => { stopRecordingAndAnalyze(newRecording); }, 15000);
-    } catch (err) { console.error('Failed to start recording', err); setError('Failed to start recording.'); }
+    } catch (err) {
+      console.error('Failed to start recording', err);
+      setError('Failed to start recording.');
+      // Ensure audio mode is reset if start fails quickly
+      await setRecordingAudioMode(false);
+    }
   };
 
   const stopRecordingAndAnalyze = async (activeRecording) => {
@@ -608,14 +567,25 @@ const EnhancedDetectScreen = () => {
       if (stopTimeoutRef.current) { clearTimeout(stopTimeoutRef.current); stopTimeoutRef.current = null; }
       await activeRecording.stopAndUnloadAsync();
       const uri = activeRecording.getURI();
+
+      // *** Set audio mode back to playback AFTER stopping recording ***
+      await setRecordingAudioMode(false); // Switch back to playback-friendly mode
+
       const formData = new FormData();
-      formData.append('audio', { uri: Platform.OS === 'ios' ? uri.replace('file://', '') : uri, type: 'audio/x-m4a', name: 'recording.m4a', });
+      formData.append('audio', { uri: Platform.OS === 'ios' ? uri.replace('file://', '') : uri, type: 'audio/x-m4a', name: 'recording.m4m', }); // Changed type to m4m if it was m4a for consistency
       const response = await fetch(ANALYZE_URL, { method: 'POST', body: formData, headers: { 'Content-Type': 'multipart/form-data' }, });
       const result = await response.json();
-      if (result.error) { setError(`Analysis failed: ${result.error}`); } 
+      if (result.error) { setError(`Analysis failed: ${result.error}`); }
       else { setAnalysisResult(result); }
-    } catch (e) { console.error('stopRecordingAndAnalyze error:', e); setError('Could not analyze audio.');
-    } finally { setRecording(null); setIsAnalyzing(false); }
+    } catch (e) {
+      console.error('stopRecordingAndAnalyze error:', e);
+      setError('Could not analyze audio.');
+      // Ensure audio mode is reset if stop/analyze fails
+      await setRecordingAudioMode(false);
+    } finally {
+      setRecording(null);
+      setIsAnalyzing(false);
+    }
   };
 
   const handleListenPress = async () => {
@@ -744,7 +714,23 @@ export default function App() {
       dropboxAuth: null,
       selectedFolder: null,
   });
-
+  useEffect(() => {
+  const setAudioMode = async () => {
+    try {
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+        shouldDuckAndroid: false,
+        defaultToSpeaker: true,
+      });
+      
+      console.log('Expo AV audio mode set successfully.');
+    } catch (e) {
+      console.error('Failed to set Expo AV audio mode:', e);
+    }
+  };
+  setAudioMode();
+}, []); // Empty dependency array means this runs once on component mount
   const navigate = (screen) => {
     setCurrentScreen(screen);
   };
@@ -761,8 +747,6 @@ export default function App() {
         return <SessionsScreen navigate={navigate} />;
       case 'NewSession':
         return <NewSessionScreen navigate={navigate} appState={appState} setAppState={setAppState} />;
-      case 'LinkDropbox':
-        return <LinkDropboxScreen navigate={navigate} setAppState={setAppState} />;
       default:
         return <MainMenu navigate={navigate} />;
     }
@@ -1711,7 +1695,35 @@ const styles = StyleSheet.create({
   songStats: {
       marginLeft: 'auto',
       alignItems: 'flex-end',
-  }
+  },
+  selectedFolderDisplay: {
+      backgroundColor: '#1C1C1C',
+      borderRadius: 8,
+      padding: 15,
+      marginBottom: 20,
+      width: '100%',
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+  },
+  selectedFolderText: {
+      color: '#FFFFFF',
+      fontSize: 16,
+      flex: 1, // Allow text to take up space
+      marginRight: 10, // Space from button
+  },
+  browseButton: {
+      backgroundColor: '#8420d0', // Use your accent color
+      paddingVertical: 8,
+      paddingHorizontal: 12,
+      borderRadius: 20,
+  },
+  browseButtonText: {
+      color: '#FFFFFF',
+      fontSize: 14,
+      fontWeight: 'bold',
+  },
+  
 });
 
 // Compact picker styles
