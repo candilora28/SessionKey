@@ -14,3 +14,6 @@ KeyFinder-Server/.env
 
 # OS files
 .DS_Store
+
+# Expo
+.expo/
