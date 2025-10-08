@@ -11,7 +11,7 @@ import {
   Easing,   // Import Easing
 } from 'react-native';
 import { Audio } from 'expo-av';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 // --- Helper Functions (unchanged - these still perform analysis on server) ---
@@ -178,7 +178,7 @@ const visualizerStyles = StyleSheet.create({
 
 
 // --- Main Component ---
-const DropboxBrowser = ({accessToken, initialPath = '', initialFolderName = 'Selected Folder' }) => {
+const DropboxBrowser = ({accessToken, initialPath = '', initialFolderName = 'Selected Folder', useScrollView = false }) => {
   const [folderContents, setFolderContents] = useState([]);
   const [currentPath, setCurrentPath] = useState(initialPath);
   const [isLoading, setIsLoading] = useState(false); // For general folder loading (listing contents)
@@ -410,6 +410,18 @@ const DropboxBrowser = ({accessToken, initialPath = '', initialFolderName = 'Sel
 
         {isLoading ? ( // This isLoading is for initial folder content loading
             <ActivityIndicator size="large" style={styles.loader} />
+        ) : useScrollView ? (
+            <View>
+                {folderContents.length === 0 ? (
+                    <Text style={styles.emptyText}>This folder is empty.</Text>
+                ) : (
+                    folderContents.map((item) => (
+                        <View key={item.id}>
+                            {renderItem({ item })}
+                        </View>
+                    ))
+                )}
+            </View>
         ) : (
             <FlatList
                 data={folderContents}

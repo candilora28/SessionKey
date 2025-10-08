@@ -8,13 +8,23 @@
     "scheme": "keyfinder",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
+    "owner": "candilora28",
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.candilora28.keyfinder",
+      "buildNumber": "1",
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true
+        },
+        "NSMicrophoneUsageDescription": "This app needs access to the microphone to analyze audio for key detection.",
+        "NSCameraUsageDescription": "This app may need camera access for certain features."
+      }
     },
     "android": {
       "adaptiveIcon": {

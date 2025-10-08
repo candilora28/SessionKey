@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -6,46 +6,43 @@ import {
   Dimensions,
   StyleSheet,
 } from 'react-native';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 const { width: screenWidth } = Dimensions.get('window');
 
 const KeyWheel = ({ selectedKey, onKeyChange }) => {
-  // Simplified key layout
+  // --- 1. ADD STATE TO MANAGE THE PRIMARY MODE ---
+  const [primaryMode, setPrimaryMode] = useState('Major');
+
+  const wheelSize = Math.min(screenWidth * 0.85, 340);
+  const centerX = wheelSize / 2;
+  const centerY = wheelSize / 2;
+  const outerRadius = wheelSize * 0.4;
+  const innerRadius = wheelSize * 0.25;
+  const majorKeySize = wheelSize * 0.13;
+  const minorKeySize = wheelSize * 0.11;
+  const centerDisplaySize = wheelSize * 0.28;
+
   const majorKeys = [
-    { name: 'C', angle: 0 },
-    { name: 'G', angle: 30 },
-    { name: 'D', angle: 60 },
-    { name: 'A', angle: 90 },
-    { name: 'E', angle: 120 },
-    { name: 'B', angle: 150 },
-    { name: 'F#', angle: 180 },
-    { name: 'C#', angle: 210 },
-    { name: 'G#', angle: 240 },
-    { name: 'D#', angle: 270 },
-    { name: 'A#', angle: 300 },
-    { name: 'F', angle: 330 },
+    { name: 'C', angle: 0 }, { name: 'G', angle: 30 }, { name: 'D', angle: 60 },
+    { name: 'A', angle: 90 }, { name: 'E', angle: 120 }, { name: 'B', angle: 150 },
+    { name: 'F#', angle: 180 }, { name: 'C#', angle: 210 }, { name: 'G#', angle: 240 },
+    { name: 'D#', angle: 270 }, { name: 'A#', angle: 300 }, { name: 'F', angle: 330 },
   ];
 
   const minorKeys = [
-    { name: 'A', angle: 0 },
-    { name: 'E', angle: 30 },
-    { name: 'B', angle: 60 },
-    { name: 'F#', angle: 90 },
-    { name: 'C#', angle: 120 },
-    { name: 'G#', angle: 150 },
-    { name: 'D#', angle: 180 },
-    { name: 'A#', angle: 210 },
-    { name: 'F', angle: 240 },
-    { name: 'C', angle: 270 },
-    { name: 'G', angle: 300 },
-    { name: 'D', angle: 330 },
+    { name: 'A', angle: 0 }, { name: 'E', angle: 30 }, { name: 'B', angle: 60 },
+    { name: 'F#', angle: 90 }, { name: 'C#', angle: 120 }, { name: 'G#', angle: 150 },
+    { name: 'D#', angle: 180 }, { name: 'A#', angle: 210 }, { name: 'F', angle: 240 },
+    { name: 'C', angle: 270 }, { name: 'G', angle: 300 }, { name: 'D', angle: 330 },
   ];
 
-  const wheelSize = Math.min(screenWidth * 0.7, 260); // Smaller wheel
-  const centerX = wheelSize / 2;
-  const centerY = wheelSize / 2;
-  const outerRadius = wheelSize * 0.35;
-  const innerRadius = wheelSize * 0.23;
+  // --- 2. DETERMINE WHICH KEYS ARE OUTER/INNER BASED ON STATE ---
+  const isPrimaryMajor = primaryMode === 'Major';
+  const outerKeys = isPrimaryMajor ? majorKeys : minorKeys;
+  const innerKeys = isPrimaryMajor ? minorKeys : majorKeys;
+  const outerMode = isPrimaryMajor ? 'Major' : 'Minor';
+  const innerMode = isPrimaryMajor ? 'Minor' : 'Major';
 
   const handleKeyPress = (keyName, mode) => {
     const fullKeyName = `${keyName} ${mode}`;
@@ -60,8 +57,7 @@ const KeyWheel = ({ selectedKey, onKeyChange }) => {
   };
 
   const isSelected = (keyName, mode) => {
-    const fullKeyName = `${keyName} ${mode}`;
-    return selectedKey === fullKeyName;
+    return selectedKey === `${keyName} ${mode}`;
   };
 
   const renderKey = (key, mode, radius, size) => {
@@ -80,14 +76,9 @@ const KeyWheel = ({ selectedKey, onKeyChange }) => {
             top: position.y - size / 2,
             width: size,
             height: size,
-            backgroundColor: selected 
-              ? '#8420d0' 
-              : isMajor 
-                ? '#4A4A4A' 
-                : '#2A2A2A',
-            borderColor: selected 
-              ? '#8420d0' 
-              : '#666',
+            borderRadius: size / 2,
+            backgroundColor: selected ? '#8420d0' : (isMajor ? '#4A4A4A' : '#2A2A2A'),
+            borderColor: selected ? '#A95BFF' : '#1C1C1C',
             borderWidth: selected ? 2 : 1,
           },
         ]}
@@ -98,7 +89,7 @@ const KeyWheel = ({ selectedKey, onKeyChange }) => {
           styles.keyText,
           {
             color: selected ? '#FFFFFF' : '#CCCCCC',
-            fontSize: isMajor ? 13 : 11,
+            fontSize: size * 0.35,
             fontWeight: selected ? 'bold' : '600',
           }
         ]}>
@@ -108,10 +99,10 @@ const KeyWheel = ({ selectedKey, onKeyChange }) => {
           styles.modeText,
           {
             color: selected ? '#FFFFFF' : '#999999',
-            fontSize: 7,
+            fontSize: size * 0.2,
           }
         ]}>
-          {isMajor ? 'M' : 'm'} {/* Uppercase M for Major, lowercase m for minor */}
+          {isMajor ? 'maj' : 'min'}
         </Text>
       </TouchableOpacity>
     );
@@ -120,24 +111,35 @@ const KeyWheel = ({ selectedKey, onKeyChange }) => {
   return (
     <View style={styles.container}>
       <View style={[styles.wheel, { width: wheelSize, height: wheelSize }]}>
-        {/* Center display */}
-        <View style={[styles.centerDisplay, {
-          left: centerX - 35,
-          top: centerY - 25,
-        }]}>
-          <Text style={styles.centerText}>{selectedKey}</Text>
-        </View>
+        {/* --- 3. MAKE THE CENTER DISPLAY A TOGGLE BUTTON --- */}
+        <TouchableOpacity
+          style={[styles.centerDisplay, {
+            width: centerDisplaySize,
+            height: centerDisplaySize,
+            borderRadius: centerDisplaySize / 2,
+            left: centerX - centerDisplaySize / 2,
+            top: centerY - centerDisplaySize / 2,
+          }]}
+          onPress={() => setPrimaryMode(prev => prev === 'Major' ? 'Minor' : 'Major')}
+          activeOpacity={0.8}
+        >
+          <Text style={[styles.centerText, { fontSize: centerDisplaySize * 0.2 }]}>
+              {selectedKey.split(' ')[0]}
+          </Text>
+          <Text style={[styles.centerModeText, { fontSize: centerDisplaySize * 0.15 }]}>
+              {selectedKey.split(' ')[1]}
+          </Text>
+          <MaterialCommunityIcons 
+            name="swap-vertical-bold" 
+            size={centerDisplaySize * 0.15} 
+            color="#B3B3B3"
+            style={{ marginTop: 4 }}
+          />
+        </TouchableOpacity>
 
-        {/* Render keys */}
-        {majorKeys.map(key => renderKey(key, 'Major', outerRadius, 36))}
-        {minorKeys.map(key => renderKey(key, 'Minor', innerRadius, 28))}
-      </View>
-
-      {/* Compact legend */}
-      <View style={styles.legend}>
-        <Text style={styles.legendText}>
-          <Text style={styles.majorIndicator}>M</Text> Major • <Text style={styles.minorIndicator}>m</Text> Minor
-        </Text>
+        {/* --- 4. RENDER KEYS DYNAMICALLY --- */}
+        {outerKeys.map(key => renderKey(key, outerMode, outerRadius, majorKeySize))}
+        {innerKeys.map(key => renderKey(key, innerMode, innerRadius, minorKeySize))}
       </View>
     </View>
   );
@@ -146,73 +148,54 @@ const KeyWheel = ({ selectedKey, onKeyChange }) => {
 const styles = StyleSheet.create({
   container: {
     alignItems: 'center',
-    paddingVertical: 15,
+    paddingVertical: 20,
   },
   wheel: {
     position: 'relative',
-    marginBottom: 15,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   centerDisplay: {
     position: 'absolute',
-    width: 70,
-    height: 50,
-    borderRadius: 25,
     backgroundColor: '#1C1C1C',
     borderWidth: 2,
     borderColor: '#8420d0',
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 10,
+    shadowColor: '#8420d0',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.5,
+    shadowRadius: 10,
+    elevation: 10,
   },
   centerText: {
     color: '#FFFFFF',
-    fontSize: 11,
     fontWeight: 'bold',
     textAlign: 'center',
   },
+  centerModeText: {
+    color: '#B3B3B3',
+    fontWeight: '500',
+    textAlign: 'center',
+    marginTop: 2,
+  },
   keyButton: {
-    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 3,
-    elevation: 5,
+    shadowOpacity: 0.4,
+    shadowRadius: 4,
+    elevation: 8,
   },
   keyText: {
-    fontWeight: '600',
     textAlign: 'center',
   },
   modeText: {
-    fontWeight: '500',
     textAlign: 'center',
     marginTop: 1,
-  },
-  legend: {
-    alignItems: 'center',
-  },
-  legendText: {
-    color: '#B3B3B3',
-    fontSize: 12,
-  },
-  majorIndicator: {
-    color: '#4A4A4A',
-    fontWeight: 'bold',
-    backgroundColor: '#4A4A4A',
-    color: '#FFFFFF',
-    paddingHorizontal: 4,
-    paddingVertical: 1,
-    borderRadius: 3,
-  },
-  minorIndicator: {
-    color: '#2A2A2A',
-    fontWeight: 'bold',
-    backgroundColor: '#2A2A2A',
-    color: '#FFFFFF',
-    paddingHorizontal: 4,
-    paddingVertical: 1,
-    borderRadius: 3,
+    textTransform: 'lowercase',
   },
 });
 

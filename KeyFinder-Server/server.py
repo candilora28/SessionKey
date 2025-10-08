@@ -2,6 +2,7 @@ import os
 import json
 import traceback
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 import requests
 import firebase_admin
 from firebase_admin import credentials, firestore
@@ -13,7 +14,11 @@ import hashlib
 import base64
 import hmac
 import time
-from acrcloud.recognizer import ACRCloudRecognizer
+try:
+    from acrcloud.recognizer import ACRCloudRecognizer
+except ImportError:
+    print("Warning: ACRCloud SDK not available. Song identification will be disabled.")
+    ACRCloudRecognizer = None
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -21,6 +26,7 @@ load_dotenv()
 
 # Initialize Flask app
 app = Flask(__name__)
+CORS(app)
 
 # --- Firebase Initialization ---
 try:
@@ -40,7 +46,7 @@ except Exception as e:
     print(f"!!! FIREBASE CONNECTION FAILED: {e} !!!")
     db = None
 
-# --- API Configurations ---
+
 # --- API Configurations ---
 ACRCLOUD_CONFIG = {
     'host': 'identify-us-west-2.acrcloud.com',
@@ -50,13 +56,19 @@ ACRCLOUD_CONFIG = {
 }
 GENIUS_ACCESS_TOKEN = os.getenv('GENIUS_ACCESS_TOKEN')
 
+# --- Spotify API Configuration ---
+SPOTIFY_CLIENT_ID = '1389aefeca2043d2a2e1885d7366d30f'
+SPOTIFY_CLIENT_SECRET = 'd36727b7ccf444f88ba29ce2cf299646'
+
 # Initialize ACRCloud recognizer
-acr = ACRCloudRecognizer(ACRCLOUD_CONFIG)
+if ACRCloudRecognizer:
+    acr = ACRCloudRecognizer(ACRCLOUD_CONFIG)
+else:
+    acr = None
 
 
 
 # Initialize Flask app
-app = Flask(__name__)
 UPLOAD_FOLDER = 'uploads'
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
@@ -67,7 +79,106 @@ NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 MAJOR_PROFILE = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88])
 MINOR_PROFILE = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17])
 
-# --- Curated Database (Expandable) ---
+# --- Comprehensive Database Analysis Functions ---
+def analyze_artist_from_database(artist_name):
+    """Analyze artist using the comprehensive music database."""
+    try:
+        # Load the comprehensive database
+        metadata_files = [f for f in os.listdir('.') if f.startswith('music_database_final') and f.endswith('.json')]
+        if not metadata_files:
+            return {'success': False, 'error': 'No comprehensive database found'}
+        
+        latest_file = sorted(metadata_files)[-1]
+        with open(latest_file, 'r', encoding='utf-8') as f:
+            database = json.load(f)
+        
+        songs = database.get('songs_with_metadata', [])
+        
+        # Find all songs by this artist (case-insensitive)
+        artist_songs = []
+        for song in songs:
+            song_artist = song.get('artist', '').lower()
+            if artist_name.lower() in song_artist:
+                artist_songs.append(song)
+        
+        if not artist_songs:
+            return {'success': False, 'error': f'No songs found for artist: {artist_name}'}
+        
+        # Analyze keys
+        key_counter = Counter()
+        bpm_values = []
+        genres = set()
+        
+        for song in artist_songs:
+            # Count keys
+            key_name = song.get('key_name')
+            mode_name = song.get('mode_name')
+            if key_name and mode_name:
+                full_key = f"{key_name} {mode_name}"
+                key_counter[full_key] += 1
+            
+            # Collect BPM values
+            tempo = song.get('tempo')
+            if tempo and isinstance(tempo, (int, float)):
+                bpm_values.append(float(tempo))
+            
+            # Collect genres
+            song_genres = song.get('genres', [])
+            for genre in song_genres:
+                if isinstance(genre, dict) and genre.get('root'):
+                    genres.add(genre['root'])
+        
+        # Get most used keys (top 5)
+        most_used_keys = [key for key, count in key_counter.most_common(5)]
+        
+        # Calculate BPM statistics
+        bpm_range = {}
+        if bpm_values:
+            bpm_range = {
+                'min': int(min(bpm_values)),
+                'max': int(max(bpm_values)),
+                'avg': int(sum(bpm_values) / len(bpm_values))
+            }
+        
+        # Get top songs by rank
+        top_songs = sorted(artist_songs, key=lambda x: x.get('spotify_rank', 9999))[:10]
+        formatted_top_songs = []
+        
+        for song in top_songs:
+            formatted_song = {
+                'title': song.get('title', 'Unknown'),
+                'artist': song.get('artist', 'Unknown Artist'),
+                'key': f"{song.get('key_name', 'N/A')} {song.get('mode_name', '')}".strip(),
+                'bpm': song.get('tempo', 'N/A'),
+                'popularity': song.get('spotify_rank', 'N/A'),
+                'release_date': song.get('release_date', 'N/A'),
+                'imageUrl': song.get('imageUrl', ''),
+                'genres': [g.get('root', '') for g in song.get('genres', []) if g.get('root')]
+            }
+            formatted_top_songs.append(formatted_song)
+        
+        # Get Spotify profile picture
+        profile_image = get_spotify_artist_image(artist_name)
+        
+        return {
+            'success': True,
+            'data': {
+                'most_used_keys': most_used_keys,
+                'bpm_range': bpm_range,
+                'preferred_genres': list(genres)[:5],
+                'top_songs': formatted_top_songs,
+                'total_songs': len(artist_songs),
+                'profile_image': profile_image,
+                'source': 'comprehensive_database',
+                'database_file': latest_file
+            }
+        }
+        
+    except Exception as e:
+        print(f"Artist analysis error: {e}")
+        return {'success': False, 'error': str(e)}
+
+# --- Legacy Curated Database (Kept for fallback) ---
 CURATED_SONGS_BY_KEY = {
     'A Minor': [
         {'title': 'Sicko Mode', 'artist': 'Travis Scott', 'bpm': 155, 'genre': 'Hip-Hop', 'popularity': 95},
@@ -97,6 +208,7 @@ CURATED_SONGS_BY_KEY = {
     ]
 }
 
+# --- Legacy Artist Profiles (Kept for fallback) ---
 ARTIST_PROFILES = {
     'Drake': {
         'most_used_keys': ['A Minor', 'D Minor', 'E Minor', 'C Major'],
@@ -305,35 +417,6 @@ def detect_tempo(y, sr):
     except Exception as e:
         print(f"Tempo detection error: {e}")
         return 120  # Default BPM
-    """Enhanced tempo detection with multiple methods for accuracy."""
-    try:
-        # Method 1: Standard beat tracking
-        tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
-        tempo = float(tempo) if np.isscalar(tempo) else float(np.mean(tempo))
-        
-        # Method 2: Onset detection for validation
-        onset_frames = librosa.onset.onset_detect(y=y, sr=sr)
-        if len(onset_frames) > 1:
-            onset_times = librosa.frames_to_time(onset_frames, sr=sr)
-            intervals = np.diff(onset_times)
-            if len(intervals) > 0:
-                avg_interval = np.median(intervals)
-                onset_tempo = 60.0 / avg_interval if avg_interval > 0 else tempo
-                
-                # Use onset tempo if it's reasonable and close to beat tempo
-                if 60 <= onset_tempo <= 200 and abs(tempo - onset_tempo) < 20:
-                    tempo = (tempo + onset_tempo) / 2
-        
-        # Adjust for common tempo ranges
-        if tempo > 200:
-            tempo = tempo / 2
-        elif tempo < 60:
-            tempo = tempo * 2
-            
-        return int(np.round(tempo))
-    except Exception as e:
-        print(f"Tempo detection error: {e}")
-        return 120  # Default BPM
 
 def detect_key(y, sr):
     """Enhanced key detection with confidence scoring."""
@@ -389,11 +472,101 @@ def detect_key(y, sr):
         print(f"Key detection error: {e}")
         return "C Major", 0, [], "A Minor"
 
+def get_spotify_artist_image(artist_name):
+    """Get artist profile picture from Spotify API"""
+    try:
+        # First, get an access token
+        token_url = "https://accounts.spotify.com/api/token"
+        token_data = {
+            'grant_type': 'client_credentials'
+        }
+        token_headers = {
+            'Authorization': 'Basic ' + base64.b64encode(
+                f"{SPOTIFY_CLIENT_ID}:{SPOTIFY_CLIENT_SECRET}".encode()
+            ).decode()
+        }
+        
+        token_response = requests.post(token_url, data=token_data, headers=token_headers)
+        if token_response.status_code != 200:
+            print(f"Spotify token error: {token_response.status_code}")
+            return None
+            
+        access_token = token_response.json()['access_token']
+        
+        # Search for the artist
+        search_url = f"https://api.spotify.com/v1/search?q={artist_name}&type=artist&limit=1"
+        search_headers = {
+            'Authorization': f'Bearer {access_token}'
+        }
+        
+        search_response = requests.get(search_url, headers=search_headers)
+        if search_response.status_code != 200:
+            print(f"Spotify search error: {search_response.status_code}")
+            return None
+            
+        artist_data = search_response.json()
+        
+        if artist_data['artists']['items']:
+            images = artist_data['artists']['items'][0].get('images', [])
+            if images:
+                return images[0]['url']  # Return the highest resolution image
+        return None
+        
+    except Exception as e:
+        print(f"Error fetching Spotify artist image: {e}")
+        return None
+
+def preprocess_audio_file(file_path):
+    """Convert audio file to a format that soundfile can handle efficiently."""
+    import os
+    import tempfile
+    import ffmpeg
+    
+    # Get file extension
+    _, ext = os.path.splitext(file_path)
+    ext = ext.lower()
+    
+    # If it's already a wav file, return as-is
+    if ext == '.wav':
+        return file_path
+    
+    # For problematic formats like .m4m, convert to temporary wav file
+    if ext in ['.m4m', '.m4a', '.mp4', '.aac']:
+        try:
+            temp_wav = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
+            temp_wav.close()
+            
+            print(f"Converting {ext} to WAV for faster processing...")
+            # Convert to WAV using ffmpeg
+            (
+                ffmpeg
+                .input(file_path)
+                .output(temp_wav.name, acodec='pcm_s16le', ar=22050, ac=1)
+                .overwrite_output()
+                .run(quiet=True)
+            )
+            return temp_wav.name
+        except Exception as e:
+            print(f"FFmpeg conversion failed: {e}")
+            return file_path
+    
+    return file_path
+
 def analyze_audio_locally(file_path):
     """Enhanced audio analysis with HPSS for better key detection."""
+    import os
+    temp_file = None
+    
     try:
-        # Load audio
-        y, sr = librosa.load(file_path, sr=22050, mono=True)
+        # Preprocess the audio file for better compatibility
+        processed_file = preprocess_audio_file(file_path)
+        if processed_file != file_path:
+            temp_file = processed_file
+            print(f"Using converted file: {processed_file}")
+        
+        # Load audio (should be much faster now with soundfile-compatible format)
+        y, sr = librosa.load(processed_file, sr=22050, mono=True)
+        print(f"Audio loaded successfully: {len(y)} samples, {sr} Hz")
         y, _ = librosa.effects.trim(y, top_db=20)
         
         # --- NEW: Separate harmonic and percussive components ---
@@ -442,44 +615,8 @@ def analyze_audio_locally(file_path):
         else:
             result['status'] = 'not_recognized'
         
-        # Save analysis to Firebase for database building
-        if db:
-            save_analysis_to_firebase(result)
-        
-        return result
-        
-    except Exception as e:
-        print(f"Analysis error: {e}")
-        return {"error": f"Analysis failed: {str(e)}"}
-    """Enhanced audio analysis with better error handling."""
-    try:
-        # Load audio
-        y, sr = librosa.load(file_path, sr=22050, mono=True)
-        y, _ = librosa.effects.trim(y, top_db=20)
-        
-        # Check if audio is valid
-        if len(y) < sr * 2:  # At least 2 seconds
-            return {"error": "Audio clip too short (minimum 2 seconds required)"}
-        
-        if np.max(np.abs(y)) < 1e-5:
-            return {"error": "Audio appears to be silent or too quiet"}
-        
-        # Analyze tempo and key
-        bpm = detect_tempo(y, sr)
-        key, confidence, alternatives, relative_key = detect_key(y, sr)
-        
-        # Try to identify the song using ACRCloud
-        song_info = identify_song_acrcloud(file_path)
-        
-        result = {
-            'key': key,
-            'key_confidence': round(confidence, 1),
-            'bpm': bpm,
-            'alternative_keys': alternatives,
-            'relative_key': relative_key,
-            'chord_progressions': CHORD_PROGRESSIONS.get(key, []),
-            'analysis_timestamp': datetime.now().isoformat()
-        }
+        # Get artists that commonly use this key from our database
+        common_artists = get_artists_by_key(key)
         
         # Add song identification if found
         if song_info and song_info.get('status') == 'success':
@@ -495,6 +632,12 @@ def analyze_audio_locally(file_path):
         else:
             result['status'] = 'not_recognized'
         
+        # Add database insights
+        result.update({
+            'common_artists': common_artists,
+            'database_insights': True
+        })
+        
         # Save analysis to Firebase for database building
         if db:
             save_analysis_to_firebase(result)
@@ -504,10 +647,21 @@ def analyze_audio_locally(file_path):
     except Exception as e:
         print(f"Analysis error: {e}")
         return {"error": f"Analysis failed: {str(e)}"}
-
+    finally:
+        # Clean up temporary file if created
+        if temp_file and os.path.exists(temp_file):
+            try:
+                os.unlink(temp_file)
+                print(f"Cleaned up temporary file: {temp_file}")
+            except Exception as e:
+                print(f"Failed to clean up temp file: {e}")
+    
 def identify_song_acrcloud(file_path):
     """Identify song using ACRCloud."""
     try:
+        if not acr:
+            return {'status': 'not_available', 'error': 'ACRCloud SDK not available'}
+            
         with open(file_path, 'rb') as f:
             audio_data = f.read()
         
@@ -559,28 +713,121 @@ def save_analysis_to_firebase(analysis_result):
     except Exception as e:
         print(f"Firebase save error: {e}")
 
-def get_songs_by_key_and_genre(key, genre=None, limit=20):
-    """Get songs by key with optional genre filtering."""
+def get_songs_by_key_and_genre(key, genre=None, min_bpm=None, max_bpm=None):
+    """Get songs by key with optional genre filtering using comprehensive database."""
     try:
-        songs = CURATED_SONGS_BY_KEY.get(key, [])
+        # Load the comprehensive music database
+        metadata_files = [f for f in os.listdir('.') if f.startswith('music_database_final') and f.endswith('.json')]
+        if not metadata_files:
+            print("No comprehensive database found, falling back to curated database")
+            songs = CURATED_SONGS_BY_KEY.get(key, [])
+            return songs
+        
+        # Get the most recent database file
+        latest_file = sorted(metadata_files)[-1]
+        print(f"Using comprehensive database: {latest_file}")
+        
+        with open(latest_file, 'r', encoding='utf-8') as f:
+            database = json.load(f)
+        
+        songs = database.get('songs_with_metadata', [])
+        print(f"Loaded {len(songs)} songs from comprehensive database")
+        
+        # Filter by key (combine key_name and mode_name)
+        filtered_songs = []
+        for song in songs:
+            song_key = song.get('key_name', '')
+            song_mode = song.get('mode_name', '')
+            
+            # Create the full key string (e.g., "A Minor", "C Major")
+            if song_key and song_mode:
+                full_key = f"{song_key} {song_mode}"
+                if full_key == key:
+                    filtered_songs.append(song)
+        
+        print(f"Found {len(filtered_songs)} songs in key '{key}'")
         
         # Filter by genre if specified
         if genre and genre.lower() != 'all':
-            songs = [s for s in songs if genre.lower() in s.get('genre', '').lower()]
+            print(f"DEBUG: Filtering by genre: '{genre}'")
+            genre_filtered_songs = []
+            for song in filtered_songs:  # Use the already key-filtered songs
+                # Check if genre matches
+                song_genres = song.get('genres', [])
+                if song_genres:
+                    # Extract genre names from the genre objects (keep original case)
+                    genre_names = []
+                    for g in song_genres:
+                        if isinstance(g, dict):
+                            root_genre = g.get('root', '')
+                            sub_genre = g.get('sub', '')
+                            if root_genre:
+                                genre_names.append(root_genre)  # Keep original case
+                            if sub_genre:
+                                # Handle sub_genre which might be a list
+                                if isinstance(sub_genre, list):
+                                    for sg in sub_genre:
+                                        if sg:
+                                            genre_names.append(sg)  # Keep original case
+                                else:
+                                    genre_names.append(sub_genre)  # Keep original case
+                    
+                    print(f"DEBUG: Song '{song.get('title', 'Unknown')}' has genres: {genre_names}")
+                    
+                    # Simple case-insensitive matching
+                    search_genre_lower = genre.strip().lower()
+                    matched = False
+                    
+                    for g in genre_names:
+                        g_lower = g.strip().lower()
+                        print(f"DEBUG: Comparing '{search_genre_lower}' with '{g_lower}'")
+                        # Exact match
+                        if search_genre_lower == g_lower:
+                            print(f"DEBUG: Exact match found!")
+                            matched = True
+                            break
+                        # Partial match (e.g., "pop" matches "pop rock")
+                        elif search_genre_lower in g_lower or g_lower in search_genre_lower:
+                            print(f"DEBUG: Partial match found!")
+                            matched = True
+                            break
+                    
+                    if matched:
+                        print(f"DEBUG: Adding song '{song.get('title', 'Unknown')}' to results")
+                        genre_filtered_songs.append(song)
+                # Include songs without genre data in genre searches to avoid fallback
+                # This ensures we use the comprehensive database even for songs without genre info
+                else:
+                    print(f"DEBUG: Song '{song.get('title', 'Unknown')}' has no genres, including it")
+                    # For songs without genre data, include them in all genre searches
+                    # This prevents falling back to the old curated database
+                    genre_filtered_songs.append(song)
+            
+            filtered_songs = genre_filtered_songs
+            print(f"After genre filtering: {len(filtered_songs)} songs")
         
-        # Sort by popularity
-        songs.sort(key=lambda x: x.get('popularity', 0), reverse=True)
+        # Filter by BPM range if specified
+        if min_bpm is not None and max_bpm is not None:
+            filtered_songs = [s for s in filtered_songs if s.get('tempo', 0) >= min_bpm and s.get('tempo', 0) <= max_bpm]
         
-        # Try to supplement with Firebase data
-        if db and len(songs) < limit:
-            firebase_songs = get_firebase_songs_by_key(key, genre, limit - len(songs))
-            songs.extend(firebase_songs)
+        # Sort by Spotify rank (higher rank = more popular)
+        filtered_songs.sort(key=lambda x: x.get('spotify_rank', 999999))
         
-        return songs[:limit]
+        print(f"Returning {len(filtered_songs)} songs from comprehensive database")
+        return filtered_songs
         
     except Exception as e:
         print(f"Error getting songs by key: {e}")
-        return []
+        # Only fallback to curated database if we're not doing genre filtering
+        # This prevents the old database from showing up when genre filtering fails
+        if genre and genre.lower() != 'all':
+            print("Genre filtering failed - returning empty results instead of falling back to old database")
+            return []
+        else:
+            print("FALLING BACK TO CURATED DATABASE!")
+            songs = CURATED_SONGS_BY_KEY.get(key, [])
+            print(f"Returning {len(songs)} songs from curated database")
+            return songs
 
 def get_firebase_songs_by_key(key, genre, limit):
     """Get additional songs from Firebase database."""
@@ -610,16 +857,79 @@ def get_firebase_songs_by_key(key, genre, limit):
         print(f"Firebase query error: {e}")
         return []
 
-def get_enhanced_artist_analysis(artist_name):
-    """Get enhanced artist analysis with Genius API integration."""
+def get_artists_by_key(key):
+    """Get artists that commonly use a specific key from the comprehensive database."""
     try:
-        # Check curated database first
+        # Load the comprehensive music database
+        metadata_files = [f for f in os.listdir('.') if f.startswith('music_database_final') and f.endswith('.json')]
+        if not metadata_files:
+            print("No comprehensive database found for artist analysis")
+            return []
+        
+        # Get the most recent database file
+        latest_file = sorted(metadata_files)[-1]
+        
+        with open(latest_file, 'r', encoding='utf-8') as f:
+            database = json.load(f)
+        
+        songs = database.get('songs_with_metadata', [])
+        
+        # Filter songs by key
+        key_songs = []
+        for song in songs:
+            song_key = song.get('key_name', '')
+            song_mode = song.get('mode_name', '')
+            
+            if song_key and song_mode:
+                full_key = f"{song_key} {song_mode}"
+                if full_key == key:
+                    key_songs.append(song)
+        
+        # Count artist occurrences and get top artists
+        artist_counts = Counter()
+        for song in key_songs:
+            artist = song.get('artist', 'Unknown Artist')
+            if artist and artist != 'Unknown Artist':
+                artist_counts[artist] += 1
+        
+        # Get top 10 artists by frequency
+        top_artists = artist_counts.most_common(10)
+        
+        # Format the results
+        formatted_artists = []
+        for artist, count in top_artists:
+            # Get a sample song from this artist in this key
+            sample_song = next((s for s in key_songs if s.get('artist') == artist), None)
+            
+            formatted_artists.append({
+                'artist': artist,
+                'song_count': count,
+                'sample_song': sample_song.get('title', 'Unknown') if sample_song else 'Unknown',
+                'spotify_rank': sample_song.get('spotify_rank', 'N/A') if sample_song else 'N/A'
+            })
+        
+        print(f"Found {len(formatted_artists)} artists commonly using key '{key}'")
+        return formatted_artists
+        
+    except Exception as e:
+        print(f"Error getting artists by key: {e}")
+        return []
+
+def get_enhanced_artist_analysis(artist_name):
+    """Get enhanced artist analysis using comprehensive database."""
+    try:
+        # Try comprehensive database first
+        result = analyze_artist_from_database(artist_name)
+        if result['success']:
+            return result
+        
+        # Fallback to legacy curated database if available
         if artist_name in ARTIST_PROFILES:
             profile = ARTIST_PROFILES[artist_name].copy()
-            profile['source'] = 'curated'
+            profile['source'] = 'legacy_curated'
             return {'success': True, 'data': profile}
         
-        return {'success': False, 'error': 'Artist not found'}
+        return {'success': False, 'error': 'Artist not found in database'}
         
     except Exception as e:
         print(f"Artist analysis error: {e}")
@@ -658,12 +968,11 @@ def handle_search_by_key():
     data = request.get_json()
     key = data.get('key')
     genre = data.get('genre', 'all')
-    limit = min(data.get('limit', 20), 50)  # Max 50 songs
     
     if not key:
         return jsonify({"error": "Key is required"}), 400
     
-    songs = get_songs_by_key_and_genre(key, genre, limit)
+    songs = get_songs_by_key_and_genre(key, genre)
     
     return jsonify({
         'success': True,
@@ -682,7 +991,7 @@ def handle_search_artist():
     if not artist_name:
         return jsonify({"error": "Artist name is required"}), 400
     
-    result = get_enhanced_artist_analysis(artist_name)
+    result = analyze_artist_from_database(artist_name)
     
     if result['success']:
         return jsonify({
@@ -710,6 +1019,24 @@ def handle_chord_progressions():
         'chord_progressions': progressions
     })
 
+@app.route('/get_artists_by_key', methods=['POST'])
+def handle_get_artists_by_key():
+    """Get artists that commonly use a specific key."""
+    data = request.get_json()
+    key = data.get('key')
+    
+    if not key:
+        return jsonify({"error": "Key is required"}), 400
+    
+    artists = get_artists_by_key(key)
+    
+    return jsonify({
+        'success': True,
+        'key': key,
+        'artists': artists,
+        'total': len(artists)
+    })
+
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint."""
@@ -721,9 +1048,126 @@ def health_check():
         }
     })
 
+@app.route('/get_music_database', methods=['GET'])
+def get_music_database():
+    """Serve the complete music database to the React Native app"""
+    try:
+        # Find the most recent complete metadata database
+        import os
+        import json
+        
+        metadata_files = [f for f in os.listdir('.') if f.startswith('music_database_final') and f.endswith('.json')]
+        if not metadata_files:
+            return jsonify({
+                'success': False,
+                'error': 'No music database found'
+            })
+        
+        # Get the most recent database file
+        latest_file = sorted(metadata_files)[-1]
+        
+        with open(latest_file, 'r', encoding='utf-8') as f:
+            database = json.load(f)
+        
+        return jsonify({
+            'success': True,
+            'database': database,
+            'filename': latest_file,
+            'total_songs': len(database.get('songs_with_metadata', [])),
+            'last_updated': database.get('database_info', {}).get('created_date', 'Unknown')
+        })
+        
+    except Exception as e:
+        print(f"Error serving music database: {e}")
+        return jsonify({
+            'success': False,
+            'error': f'Failed to load database: {str(e)}'
+        })
+
+@app.route('/get_available_genres', methods=['GET'])
+def get_available_genres():
+    """Get all available genres from the comprehensive database"""
+    try:
+        # Find the comprehensive database
+        metadata_files = [f for f in os.listdir('.') if f.startswith('music_database_final') and f.endswith('.json')]
+        if not metadata_files:
+            return jsonify({
+                'success': False,
+                'error': 'No comprehensive database found'
+            })
+        
+        latest_file = sorted(metadata_files)[-1]
+        
+        with open(latest_file, 'r', encoding='utf-8') as f:
+            database = json.load(f)
+        
+        songs = database.get('songs_with_metadata', [])
+        
+        # Collect all unique genres and standardize them
+        all_genres = set()
+        for song in songs:
+            song_genres = song.get('genres', [])
+            if song_genres:
+                for genre in song_genres:
+                    if isinstance(genre, dict):
+                        root_genre = genre.get('root', '')
+                        sub_genre = genre.get('sub', '')
+                        if root_genre:
+                            # Standardize genre names: capitalize first letter, lowercase rest
+                            standardized = root_genre.strip().lower()
+                            if standardized:
+                                # Capitalize first letter
+                                standardized = standardized[0].upper() + standardized[1:]
+                                all_genres.add(standardized)
+                        if sub_genre:
+                            # Handle sub_genre which might be a list
+                            if isinstance(sub_genre, list):
+                                for sg in sub_genre:
+                                    if sg:
+                                        standardized = sg.strip().lower()
+                                        if standardized:
+                                            standardized = standardized[0].upper() + standardized[1:]
+                                            all_genres.add(standardized)
+                            else:
+                                standardized = sub_genre.strip().lower()
+                                if standardized:
+                                    standardized = standardized[0].upper() + standardized[1:]
+                                    all_genres.add(standardized)
+        
+        # Sort genres alphabetically
+        sorted_genres = sorted(all_genres)
+        
+        return jsonify({
+            'success': True,
+            'genres': sorted_genres,
+            'total_genres': len(sorted_genres)
+        })
+        
+    except Exception as e:
+        print(f"Error getting available genres: {e}")
+        return jsonify({
+            'success': False,
+            'error': f'Failed to get genres: {str(e)}'
+        })
+
 if __name__ == '__main__':
     print("🎵 Music Producer Companion Server Starting...")
-    print(f"📊 Curated songs database: {sum(len(songs) for songs in CURATED_SONGS_BY_KEY.values())} songs")
+    # Count songs in comprehensive database
+    metadata_files = [f for f in os.listdir('.') if f.startswith('music_database_final') and f.endswith('.json')]
+    if metadata_files:
+        latest_file = sorted(metadata_files)[-1]
+        try:
+            with open(latest_file, 'r', encoding='utf-8') as f:
+                database = json.load(f)
+            song_count = len(database.get('songs_with_metadata', []))
+            print(f"📊 Comprehensive music database: {song_count} songs")
+        except:
+            print(f"📊 Curated songs database: {sum(len(songs) for songs in CURATED_SONGS_BY_KEY.values())} songs")
+    else:
+        print(f"📊 Curated songs database: {sum(len(songs) for songs in CURATED_SONGS_BY_KEY.values())} songs")
     print(f"🎤 Artist profiles: {len(ARTIST_PROFILES)} artists")
     print(f"🎹 Chord progressions: {len(CHORD_PROGRESSIONS)} keys")
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    
+    # Get port from environment variable (Railway sets this automatically)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)

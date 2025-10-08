@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  SafeAreaView,
   StyleSheet,
   Text,
   View,
@@ -14,160 +13,311 @@ import {
   Image,
   Linking,
   TextInput,
+  Switch,
   Modal,
+  Alert,
 } from 'react-native';
 import { Audio } from 'expo-av';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import RNPickerSelect from 'react-native-picker-select';
+import { Picker } from '@react-native-picker/picker';
 import KeyWheel from './KeyWheel';
 import * as AuthSession from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 import DropboxBrowser from './DropboxBrowser';
 import DropboxFolderPicker from './DropboxFolderPicker';
+import Keyboard from './src/components/Keyboard';
+import WaveformAnimation from './src/components/WaveformAnimation';
+import LottieView from 'lottie-react-native'; 
+import { StatusBar } from 'expo-status-bar';
+import MultiSlider from '@ptomasroos/react-native-multi-slider';
+import { styles, compactPickerStyles, sessionStyles } from './styles';
 
+// --- 1. FIREBASE IMPORTS ---
+import { initializeApp } from 'firebase/app';
+import { getFirestore, collection, addDoc, onSnapshot, query, orderBy } from 'firebase/firestore';
+import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 
 WebBrowser.maybeCompleteAuthSession();
 
-// Server configuration
-const SERVER_IP = '192.168.50.242';
-const ANALYZE_URL = `http://${SERVER_IP}:5000/analyze`;
-const SEARCH_ARTIST_URL = `http://${SERVER_IP}:5000/search_artist`;
-const SEARCH_BY_KEY_URL = `http://${SERVER_IP}:5000/search_by_key`;
-const CHORD_PROGRESSIONS_URL = `http://${SERVER_IP}:5000/get_chord_progressions`;
+// --- Server Configuration ---
+// TODO: Replace with your actual Railway deployment URL
+const SERVER_URL = 'https://your-app-name.railway.app'; // Replace this with your Railway URL
+const ANALYZE_URL = `${SERVER_URL}/analyze`;
+const SEARCH_ARTIST_URL = `${SERVER_URL}/search_artist`;
+const SEARCH_BY_KEY_URL = `${SERVER_URL}/search_by_key`;
+const CHORD_PROGRESSIONS_URL = `${SERVER_URL}/get_chord_progressions`;
+const ARTISTS_BY_KEY_URL = `${SERVER_URL}/get_artists_by_key`;
 
-// --- Dropbox Configuration ---
 const DROPBOX_APP_KEY = '1qfdizul5aujvge';
 const redirectUri = AuthSession.makeRedirectUri({ useProxy: true });
 
+const firebaseConfig = {
+  apiKey: "AIzaSyDxol2vFJreQ3NEfNguCPaU6CrIhVCRVko",
+  authDomain: "keyfinder-prod-app.firebaseapp.com",
+  projectId: "keyfinder-prod-app",
+  storageBucket: "keyfinder-prod-app.firebasestorage.app",
+  messagingSenderId: "926639284309",
+  appId: "1:926639284309:web:393eeffea74634442bf4dc",
+  measurementId: "G-F9LEBNTQ6W"
+};
 
-// --- Reusable Components ---
-const Keyboard = ({ detectedKey }) => {
-  if (!detectedKey || !detectedKey.key) return null;
-  const NOTES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-  const MAJOR_SCALE_INTERVALS = [0, 2, 4, 5, 7, 9, 11];
-  const MINOR_SCALE_INTERVALS = [0, 2, 3, 5, 7, 8, 10];
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+const auth = getAuth(app);
 
-  const getScaleNotes = () => {
-    const [rootNoteName, mode] = detectedKey.key.split(' ');
-    const rootNoteIndex = NOTES.indexOf(rootNoteName);
-    if (rootNoteIndex === -1) return [];
-    const intervals = mode === 'Major' ? MAJOR_SCALE_INTERVALS : MINOR_SCALE_INTERVALS;
-    return intervals.map(interval => NOTES[(rootNoteIndex + interval) % 12]);
-  };
+const CustomPicker = ({ items, selectedValue, onValueChange, placeholder }) => {
+    const [modalVisible, setModalVisible] = useState(false);
+    const [tempSelectedValue, setTempSelectedValue] = useState(selectedValue);
+    const selectedLabel = items.find(item => item.value === selectedValue)?.label || placeholder;
 
-  const scaleNotes = getScaleNotes();
-  const whiteKeys = NOTES.filter(note => !note.includes('#'));
+    const openModal = () => {
+        setTempSelectedValue(selectedValue);
+        setModalVisible(true);
+    };
 
+    const handleDone = () => {
+        onValueChange(tempSelectedValue);
+        setModalVisible(false);
+    };
+
+    return (
+        <>
+            <TouchableOpacity style={styles.pickerDisplayButton} onPress={openModal}>
+                <Text style={styles.pickerDisplayText}>{selectedLabel}</Text>
+                <MaterialCommunityIcons name="chevron-down" size={20} color="#FFFFFF" />
+            </TouchableOpacity>
+            <Modal
+                animationType="slide"
+                transparent={true}
+                visible={modalVisible}
+                onRequestClose={() => setModalVisible(false)}
+            >
+                <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPressOut={() => setModalVisible(false)}>
+                    <View onStartShouldSetResponder={() => true}>
+                        {/* --- THE FIX: Removed fixed height and added padding --- */}
+                        <View style={[styles.modalContent, { height: 'auto', paddingBottom: 40 }]}>
+                            <View style={styles.modalHeader}>
+                                <Text style={styles.modalTitle}>{placeholder}</Text>
+                                <TouchableOpacity onPress={handleDone}>
+                                    <Text style={styles.modalCloseButtonText}>Done</Text>
+                                </TouchableOpacity>
+                            </View>
+                            <Picker
+                                selectedValue={tempSelectedValue}
+                                onValueChange={(itemValue) => setTempSelectedValue(itemValue)}
+                                itemStyle={{ color: 'white' }}
+                            >
+                                {items.map((item) => (
+                                    <Picker.Item key={item.value} label={item.label} value={item.value} />
+                                ))}
+                            </Picker>
+                        </View>
+                    </View>
+                </TouchableOpacity>
+            </Modal>
+        </>
+    );
+};
+
+
+// --- Screen Components ---
+const MainMenu = ({ navigate }) => {
   return (
-    <View style={styles.keyboardContainer}>
-      {whiteKeys.map(note => (
-        <View key={note} style={[styles.whiteKey, scaleNotes.includes(note) && styles.highlightedKey]}>
-          <Text style={styles.keyText}>{note}</Text>
-        </View>
-      ))}
-      <View style={styles.blackKeysContainer}>
-        <View style={styles.blackKeyWrapper}><View style={[styles.blackKey, scaleNotes.includes('C#') && styles.highlightedKey]}><Text style={styles.blackKeyText}>C#</Text></View></View>
-        <View style={styles.blackKeyWrapper}><View style={[styles.blackKey, scaleNotes.includes('D#') && styles.highlightedKey]}><Text style={styles.blackKeyText}>D#</Text></View></View>
-        <View style={styles.blackKeyWrapper} />
-        <View style={styles.blackKeyWrapper}><View style={[styles.blackKey, scaleNotes.includes('F#') && styles.highlightedKey]}><Text style={styles.blackKeyText}>F#</Text></View></View>
-        <View style={styles.blackKeyWrapper}><View style={[styles.blackKey, scaleNotes.includes('G#') && styles.highlightedKey]}><Text style={styles.blackKeyText}>G#</Text></View></View>
-        <View style={styles.blackKeyWrapper}><View style={[styles.blackKey, scaleNotes.includes('A#') && styles.highlightedKey]}><Text style={styles.blackKeyText}>A#</Text></View></View>
+    <View style={styles.mainContent}>
+      <View style={{ flex: 0.6, width: '115%' }}>
+        {/* --- THE FIX: Added a style prop with width and height --- */}
+        <LottieView
+            style={{ width: '100%', height: '100%' }}
+            source={require('./assets/wave-animation.json')} // Make sure your file is named this and in the assets folder
+            autoPlay
+            loop
+        />
+         {/* The foreground animation, layered on top */}
+        <LottieView
+            style={{ 
+                width: '60%', 
+                height: '60%', 
+                position: 'absolute', // This is the key
+                top: 55,
+                left: 85,
+                
+            }}
+            source={require('./assets/piano-icon.json')} // Your new Lottie file
+            autoPlay
+            loop
+            speed={0.5}
+        />
+      </View>
+      <View style={{ flex: 1, width: '100%', justifyContent: 'center' }}>
+          <TouchableOpacity style={styles.menuButton} onPress={() => navigate('Sessions')}>
+          <MaterialCommunityIcons name="clipboard-text-multiple" size={24} color="#FFFFFF" style={styles.menuIcon} />
+          <Text style={styles.menuButtonText}>Sessions</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.menuButton} onPress={() => navigate('SearchByKey')}>
+          <MaterialCommunityIcons name="music-note" size={24} color="#FFFFFF" style={styles.menuIcon} />
+          <Text style={styles.menuButtonText}>Search by Key & BPM</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.menuButton} onPress={() => navigate('SearchByArtist')}>
+          <MaterialCommunityIcons name="account-music" size={24} color="#FFFFFF" style={styles.menuIcon} />
+          <Text style={styles.menuButtonText}>Search By Artist</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.menuButton} onPress={() => navigate('Detect')}>
+          <MaterialCommunityIcons name="microphone-variant" size={24} color="#FFFFFF" style={styles.menuIcon} />
+          <Text style={styles.menuButtonText}>Detect & Analyze Audio</Text>
+          </TouchableOpacity>
       </View>
     </View>
   );
 };
 
-const WaveformAnimation = () => {
-  const animValues = useRef([...Array(7)].map(() => new Animated.Value(0.2))).current;
-  
-  useEffect(() => {
-    const animations = animValues.map((anim, i) => {
-      const duration = 400;
-      const delay = i * 100;
-      return Animated.loop(
-        Animated.sequence([
-          Animated.timing(anim, { toValue: 0.7, duration, easing: Easing.inOut(Easing.ease), useNativeDriver: true, delay }),
-          Animated.timing(anim, { toValue: 0.2, duration, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-        ])
-      );
-    });
-    Animated.parallel(animations).start();
-  }, [animValues]);
+const SessionsScreen = ({ navigate, db }) => { // <-- Receive db as a prop
+    const [sessions, setSessions] = useState([]);
+    const [isLoading, setIsLoading] = useState(true);
 
-  return (
-    <View style={styles.waveformContainer}>
-      {animValues.map((anim, index) => (
-        <Animated.View key={index} style={[styles.waveformBar, { transform: [{ scaleY: anim }] }]}/>
-      ))}
-    </View>
-  );
+    useEffect(() => {
+        const q = query(collection(db, "sessions"), orderBy("createdAt", "desc"));
+        const unsubscribe = onSnapshot(q, (querySnapshot) => {
+            const sessionsData = [];
+            querySnapshot.forEach((doc) => {
+                sessionsData.push({ ...doc.data(), id: doc.id });
+            });
+            setSessions(sessionsData);
+            setIsLoading(false);
+        });
+
+        return () => unsubscribe();
+    }, []);
+
+    const handleOpenSession = (session) => {
+        console.log('Opening session:', session);
+        // Navigate to NewSession screen with the session data for editing
+        navigate('NewSession', { editMode: true, sessionData: session });
+    };
+
+    const editSession = (session) => {
+        // Navigate to edit mode - for now just log
+        console.log('Edit session:', session.id);
+        // You could navigate to the NewSession screen with pre-filled data
+        // navigate('NewSession', { editMode: true, sessionData: session });
+    };
+
+    const renderSessionItem = ({ item }) => (
+        <TouchableOpacity style={sessionStyles.sessionCard} onPress={() => handleOpenSession(item)}>
+            <View style={sessionStyles.sessionCardContent}>
+                {/* Artist image */}
+                <View style={sessionStyles.sessionArtistImageContainer}>
+                    {item.artistDetails?.top_songs?.[0]?.cover_art_url ? (
+                        <Image 
+                            source={{ uri: item.artistDetails.top_songs[0].cover_art_url }} 
+                            style={sessionStyles.sessionArtistImage}
+                            resizeMode="cover"
+                        />
+                    ) : (
+                        <View style={sessionStyles.sessionArtistImagePlaceholder}>
+                            <MaterialCommunityIcons 
+                                name={item.artistDetails?.custom ? "account" : "account-music"} 
+                                size={20} 
+                                color="#666" 
+                            />
+                        </View>
+                    )}
+                </View>
+                
+                {/* Session info */}
+                <View style={sessionStyles.sessionCardInfo}>
+                    <Text style={sessionStyles.sessionCardTitle}>{item.artistName}</Text>
+                    <View style={sessionStyles.sessionCardDetails}>
+                        <Text style={sessionStyles.sessionCardDate}>
+                            {new Date(item.createdAt.seconds * 1000).toLocaleDateString()}
+                        </Text>
+                        {item.artistDetails?.custom ? (
+                            <Text style={sessionStyles.sessionCardType}>Custom Artist</Text>
+                        ) : item.artistDetails?.most_used_keys?.[0] ? (
+                            <Text style={sessionStyles.sessionCardType}>
+                                Key: {item.artistDetails.most_used_keys[0]}
+                            </Text>
+                        ) : null}
+                    </View>
+                    {item.sessionNotes && (
+                        <Text style={sessionStyles.sessionCardNotes} numberOfLines={1}>
+                            {item.sessionNotes}
+                        </Text>
+                    )}
+                </View>
+            </View>
+            <MaterialCommunityIcons name="chevron-right" size={24} color="#FFFFFF" />
+        </TouchableOpacity>
+    );
+
+    return (
+        <View style={styles.featureScreen}>
+            <Text style={styles.featureTitle}>Your Sessions</Text>
+            {isLoading ? (
+                <ActivityIndicator size="large" color="#8420d0" />
+            ) : sessions.length === 0 ? (
+                <View style={styles.emptyContainer}>
+                    <MaterialCommunityIcons name="clipboard-text-off-outline" size={32} color="#666" />
+                    <Text style={styles.emptyText}>No Sessions Yet</Text>
+                    <Text style={styles.emptySubtext}>Create a new session to get started.</Text>
+                </View>
+            ) : (
+                <FlatList
+                    data={sessions}
+                    renderItem={renderSessionItem}
+                    keyExtractor={item => item.id}
+                    style={{ width: '100%' }}
+                />
+            )}
+            <TouchableOpacity style={styles.primaryButton} onPress={() => navigate('NewSession')}>
+                <Text style={styles.primaryButtonText}>Create New Session</Text>
+            </TouchableOpacity>
+        </View>
+    );
 };
 
-
-
-
-// --- Screen Components ---
-const MainMenu = ({ navigate }) => (
-  <View style={styles.mainContent}>
-    <TouchableOpacity style={styles.menuButton} onPress={() => navigate('Sessions')}>
-      <MaterialCommunityIcons name="clipboard-text-multiple" size={24} color="#FFFFFF" style={styles.menuIcon} />
-      <Text style={styles.menuButtonText}>Sessions</Text>
-    </TouchableOpacity>
-    <TouchableOpacity style={styles.menuButton} onPress={() => navigate('SearchByKey')}>
-      <MaterialCommunityIcons name="music-note" size={24} color="#FFFFFF" style={styles.menuIcon} />
-      <Text style={styles.menuButtonText}>Search by Key & BPM</Text>
-    </TouchableOpacity>
-    <TouchableOpacity style={styles.menuButton} onPress={() => navigate('SearchByArtist')}>
-      <MaterialCommunityIcons name="account-music" size={24} color="#FFFFFF" style={styles.menuIcon} />
-      <Text style={styles.menuButtonText}>Search By Artist</Text>
-    </TouchableOpacity>
-    <TouchableOpacity style={styles.menuButton} onPress={() => navigate('Detect')}>
-      <MaterialCommunityIcons name="microphone-variant" size={24} color="#FFFFFF" style={styles.menuIcon} />
-      <Text style={styles.menuButtonText}>Detect & Analyze Audio</Text>
-    </TouchableOpacity>
-  </View>
-);
-
-const SessionsScreen = ({ navigate }) => (
-    <View style={styles.featureScreen}>
-        <Text style={styles.featureTitle}>Your Sessions</Text>
-        <View style={styles.emptyContainer}>
-            <MaterialCommunityIcons name="clipboard-text-off-outline" size={32} color="#666" />
-            <Text style={styles.emptyText}>No Sessions Yet</Text>
-            <Text style={styles.emptySubtext}>Create a new session to get started.</Text>
-        </View>
-        <TouchableOpacity style={styles.primaryButton} onPress={() => navigate('NewSession')}>
-            <Text style={styles.primaryButtonText}>Create New Session</Text>
-        </TouchableOpacity>
-    </View>
-);
-
-const NewSessionScreen = ({ navigate, appState, setAppState }) => {
-    const [artistName, setArtistName] = useState('');
-    const [sessionNotes, setSessionNotes] = useState('');
-    const [artistData, setArtistData] = useState(null);
+const NewSessionScreen = ({ navigate, appState, setAppState, db, params }) => { // <-- Receive db and params as props
+    // Check if we're in edit mode
+    const isEditMode = params?.editMode && params?.sessionData;
+    const sessionData = params?.sessionData;
+    
+    const [artistName, setArtistName] = useState(isEditMode ? sessionData.artistName : '');
+    const [sessionNotes, setSessionNotes] = useState(isEditMode ? sessionData.sessionNotes : '');
+    const [artistData, setArtistData] = useState(isEditMode ? sessionData.artistDetails : null);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState('');
     const [isFolderPickerVisible, setFolderPickerVisible] = useState(false);
-
-    // NEW STATE: To store the path of the folder selected for browsing its content
     const [isContentBrowserVisible, setIsContentBrowserVisible] = useState(false);
     const [selectedBrowseFolderPath, setSelectedBrowseFolderPath] = useState('');
+    const [isSaving, setIsSaving] = useState(false);
+    const [searchSuggestions, setSearchSuggestions] = useState([]);
+    const [showSuggestions, setShowSuggestions] = useState(false);
 
 
     const [request, response, promptAsync] = AuthSession.useAuthRequest(
         {
             clientId: DROPBOX_APP_KEY,
-            scopes: ['files.metadata.read', 'files.content.read', 'sharing.write'], // Ensure content.read is here
+            scopes: ['files.metadata.read', 'files.content.read', 'sharing.write'],
             responseType: 'token',
             redirectUri,
             usePKCE: false,
-            useProxy: true,
         },
         {
             authorizationEndpoint: 'https://www.dropbox.com/oauth2/authorize',
         }
     );
+
+    // Initialize data if in edit mode
+    useEffect(() => {
+        if (isEditMode && sessionData.dropboxFolder) {
+            setAppState(prevState => ({ 
+                ...prevState, 
+                selectedFolder: sessionData.dropboxFolder 
+            }));
+            setSelectedBrowseFolderPath(sessionData.dropboxFolder.path_lower || '');
+        }
+    }, [isEditMode, sessionData]);
 
     useEffect(() => {
         if (response?.type === 'success') {
@@ -187,7 +337,7 @@ const NewSessionScreen = ({ navigate, appState, setAppState }) => {
             const data = await res.json();
             const displayName = data?.name?.display_name || 'Dropbox User';
             setAppState(prevState => ({ ...prevState, dropboxAuth: { token, name: displayName } }));
-            setFolderPickerVisible(true); // Open folder picker after auth
+            setFolderPickerVisible(true);
         } catch (e) {
             setError('Failed to fetch Dropbox user info.');
         }
@@ -195,48 +345,136 @@ const NewSessionScreen = ({ navigate, appState, setAppState }) => {
 
     const handleDropboxLink = () => {
         if (appState.dropboxAuth) {
-            setFolderPickerVisible(true); // Open folder picker if already auth
+            setFolderPickerVisible(true);
         } else {
-            promptAsync(); // Start OAuth flow
+            promptAsync();
         }
     };
 
     const handleSelectFolder = (folder) => {
         setAppState(prevState => ({ ...prevState, selectedFolder: folder }));
-        setFolderPickerVisible(false); // Close initial folder picker
-        setSelectedBrowseFolderPath(folder.path_lower); // Set the path for the content browser
-        // *** MODIFIED: Set content browser visible when a folder is selected ***
-        setIsContentBrowserVisible(true); // Automatically show browser after selecting folder
+        setFolderPickerVisible(false);
+        setSelectedBrowseFolderPath(folder.path_lower);
+        setIsContentBrowserVisible(true);
     };
 
     const handleArtistSearch = async () => {
         if (!artistName) return;
         setIsLoading(true);
         setError('');
+        setArtistData(null); // Clear previous results
+        setSearchSuggestions([]);
+        setShowSuggestions(false);
+        
         try {
             const resp = await fetch(SEARCH_ARTIST_URL, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ artist: artistName }),
+                body: JSON.stringify({ 
+                    artist: artistName,
+                    include_suggestions: true, // Request suggestions for fuzzy matching
+                    max_suggestions: 3
+                }),
             });
             const result = await resp.json();
+            
             if (result.success) {
+                // Exact artist found in database
                 setArtistData(result);
+                setError(''); // Clear any previous errors
+                setShowSuggestions(false);
+            } else if (result.suggestions && result.suggestions.length > 0) {
+                // No exact match, but we have suggestions
+                setArtistData(null);
+                setSearchSuggestions(result.suggestions);
+                setShowSuggestions(true);
+                setError(''); // Clear error since we have suggestions
             } else {
-                setArtistData({ artist: artistName, custom: true });
-                setError('Artist not in database. Creating custom session.');
+                // No exact match and no suggestions - offer custom option
+                setArtistData(null);
+                setSearchSuggestions([]);
+                setShowSuggestions(false);
+                setError(`"${artistName}" not found in our database. You can still create a custom session below.`);
             }
         } catch (err) {
-            setError('Failed to search for artist.');
+            console.error("Artist Search Error:", err);
+            setError('Unable to search database. Please check your connection and try again.');
+            setArtistData(null);
+            setSearchSuggestions([]);
+            setShowSuggestions(false);
         } finally {
             setIsLoading(false);
+        }
+    };
+
+    const handleCreateCustomArtist = () => {
+        if (!artistName) return;
+        setArtistData({ 
+            artist: artistName, 
+            custom: true,
+            created_at: new Date().toISOString()
+        });
+        setError(''); // Clear error when creating custom artist
+        setShowSuggestions(false);
+    };
+
+    const handleSelectSuggestion = async (suggestedArtist) => {
+        setArtistName(suggestedArtist.artist);
+        setIsLoading(true);
+        setShowSuggestions(false);
+        
+        try {
+            // Fetch full data for the suggested artist
+            const resp = await fetch(SEARCH_ARTIST_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ artist: suggestedArtist.artist }),
+            });
+            const result = await resp.json();
+            
+            if (result.success) {
+                setArtistData(result);
+                setError('');
+            }
+        } catch (err) {
+            console.error("Error fetching suggested artist:", err);
+            setError('Failed to load artist data.');
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const handleSaveSession = async () => {
+        if (!artistName) {
+            setError('Please enter an artist name.');
+            return;
+        }
+        setIsSaving(true);
+        setError('');
+        try {
+            const sessionData = {
+                artistName: artistName,
+                sessionNotes: sessionNotes,
+                artistDetails: artistData || {},
+                dropboxFolder: appState.selectedFolder || null,
+                createdAt: new Date(),
+            };
+
+            await addDoc(collection(db, "sessions"), sessionData);
+            
+            navigate('Sessions');
+
+        } catch (e) {
+            console.error("Error adding document: ", e);
+            setError('Failed to save session. Please try again.');
+        } finally {
+            setIsSaving(false);
         }
     };
 
 
     return (
         <>
-            {/* 1. Dropbox Folder Picker Modal (UNCHANGED - it's still a modal for initial selection) */}
             <DropboxFolderPicker
                 visible={isFolderPickerVisible}
                 onClose={() => setFolderPickerVisible(false)}
@@ -244,10 +482,8 @@ const NewSessionScreen = ({ navigate, appState, setAppState }) => {
                 dropboxAuth={appState.dropboxAuth}
             />
 
-            {/* Main Content Area: A ScrollView to contain everything */}
             <ScrollView style={styles.featureScreenContainer} contentContainerStyle={styles.featureScreenContent}>
-                {/* Top Section: Session Details Inputs */}
-                <Text style={styles.featureTitle}>New Session</Text>
+                <Text style={styles.featureTitle}>{isEditMode ? 'Edit Session' : 'New Session'}</Text>
                 <View style={styles.inputGroup}>
                     <Text style={styles.inputLabel}>Artist Name</Text>
                     <View style={styles.searchContainer2}>
@@ -257,15 +493,95 @@ const NewSessionScreen = ({ navigate, appState, setAppState }) => {
                         </TouchableOpacity>
                     </View>
                 </View>
+                
+                {/* Search suggestions for fuzzy matching */}
+                {showSuggestions && searchSuggestions.length > 0 && (
+                    <View style={styles.searchSuggestionsContainer}>
+                        <View style={styles.suggestionsHeader}>
+                            <MaterialCommunityIcons name="help-circle" size={20} color="#8420d0" />
+                            <Text style={styles.suggestionsHeaderText}>Did you mean?</Text>
+                        </View>
+                        {searchSuggestions.map((suggestion, index) => (
+                            <TouchableOpacity 
+                                key={index} 
+                                style={styles.suggestionItem}
+                                onPress={() => handleSelectSuggestion(suggestion)}
+                            >
+                                <View style={styles.suggestionContent}>
+                                    {suggestion.profile_image ? (
+                                        <Image 
+                                            source={{ uri: suggestion.profile_image }} 
+                                            style={styles.suggestionImage}
+                                            resizeMode="cover"
+                                        />
+                                    ) : (
+                                        <View style={styles.suggestionImagePlaceholder}>
+                                            <MaterialCommunityIcons name="account-music" size={20} color="#666" />
+                                        </View>
+                                    )}
+                                    <View style={styles.suggestionInfo}>
+                                        <Text style={styles.suggestionName}>{suggestion.artist}</Text>
+                                        <Text style={styles.suggestionDetails}>
+                                            {suggestion.most_used_keys?.[0] && `Key: ${suggestion.most_used_keys[0]}`}
+                                            {suggestion.bpm_range && ` • ${suggestion.bpm_range.min}-${suggestion.bpm_range.max} BPM`}
+                                        </Text>
+                                    </View>
+                                </View>
+                                <MaterialCommunityIcons name="chevron-right" size={20} color="#8420d0" />
+                            </TouchableOpacity>
+                        ))}
+                        <View style={styles.suggestionsDivider} />
+                        <TouchableOpacity style={styles.createCustomSuggestionButton} onPress={handleCreateCustomArtist}>
+                            <MaterialCommunityIcons name="account-plus" size={20} color="#666" />
+                            <Text style={styles.createCustomSuggestionText}>Or create custom artist: "{artistName}"</Text>
+                        </TouchableOpacity>
+                    </View>
+                )}
+                
+                {/* Error message and custom artist option */}
+                {error && !artistData && !showSuggestions && (
+                    <View style={styles.searchErrorContainer}>
+                        <View style={styles.errorMessageCard}>
+                            <MaterialCommunityIcons name="information" size={20} color="#FFA500" />
+                            <Text style={styles.errorMessageText}>{error}</Text>
+                        </View>
+                        {artistName && (
+                            <TouchableOpacity style={styles.createCustomButton} onPress={handleCreateCustomArtist}>
+                                <MaterialCommunityIcons name="account-plus" size={20} color="#8420d0" />
+                                <Text style={styles.createCustomButtonText}>Create Custom Artist: "{artistName}"</Text>
+                            </TouchableOpacity>
+                        )}
+                    </View>
+                )}
+                
                 {artistData && (
                     <View style={styles.artistInfoCard}>
-                        <Image source={{ uri: artistData.top_songs?.[0]?.cover_art_url || 'https://placehold.co/100x100/282828/FFF?text=?' }} style={styles.artistImage} />
+                        {artistData.profile_image || artistData.top_songs?.[0]?.cover_art_url ? (
+                            <Image 
+                                source={{ uri: artistData.profile_image || artistData.top_songs?.[0]?.cover_art_url }} 
+                                style={styles.artistImage} 
+                                resizeMode="cover"
+                            />
+                        ) : (
+                            <View style={styles.artistImagePlaceholder}>
+                                <MaterialCommunityIcons 
+                                    name={artistData.custom ? "account" : "account-music"} 
+                                    size={30} 
+                                    color="#666" 
+                                />
+                            </View>
+                        )}
                         <View style={styles.artistInfoText}>
                             <Text style={styles.artistName}>{artistData.artist}</Text>
-                            {artistData.custom ? (<Text style={styles.artistSubtext}>Custom Artist</Text>) : (
+                            {artistData.custom ? (
+                                <Text style={styles.artistSubtext}>Custom Artist</Text>
+                            ) : (
                                 <>
                                     <Text style={styles.artistSubtext}>Top Key: {artistData.most_used_keys?.[0] || 'N/A'}</Text>
                                     <Text style={styles.artistSubtext}>BPM Range: {artistData.bpm_range?.min}-{artistData.bpm_range?.max}</Text>
+                                    {artistData.total_songs && (
+                                        <Text style={styles.artistSubtext}>{artistData.total_songs} songs in database</Text>
+                                    )}
                                 </>
                             )}
                         </View>
@@ -290,15 +606,14 @@ const NewSessionScreen = ({ navigate, appState, setAppState }) => {
                     </TouchableOpacity>
                 </View>
 
-                {/* --- Conditional Buttons for showing/hiding Dropbox Browser --- */}
                 {appState.selectedFolder && (
                     <View style={styles.selectedFolderDisplay}>
                         <Text style={styles.selectedFolderText}>
                             Current Folder: {appState.selectedFolder.name}
                         </Text>
                         <TouchableOpacity
-                            onPress={() => setIsContentBrowserVisible(prev => !prev)} // Toggle visibility
-                            style={styles.toggleBrowseButton} // New style for toggle button
+                            onPress={() => setIsContentBrowserVisible(prev => !prev)}
+                            style={styles.browseButton}
                         >
                             <Text style={styles.browseButtonText}>
                                 {isContentBrowserVisible ? 'Hide Files' : 'Browse Files'}
@@ -308,96 +623,445 @@ const NewSessionScreen = ({ navigate, appState, setAppState }) => {
                 )}
 
 
-                {/* --- Bottom Section: Embedded Dropbox Browser (Conditional Rendering) --- */}
-                {isContentBrowserVisible && appState.selectedFolder && ( // Render only if toggled visible AND folder selected
+                {isContentBrowserVisible && appState.selectedFolder && (
                     <DropboxBrowser
                         accessToken={appState.dropboxAuth?.token}
                         initialPath={selectedBrowseFolderPath}
                         initialFolderName={appState.selectedFolder?.name || 'Selected Folder'}
+                        useScrollView={true}
                     />
                 )}
 
-                <TouchableOpacity style={styles.primaryButton}><Text style={styles.primaryButtonText}>Save Session</Text></TouchableOpacity>
+                <TouchableOpacity style={styles.primaryButton} onPress={handleSaveSession} disabled={isSaving}>
+                    {isSaving ? (
+                        <ActivityIndicator color="#FFFFFF" />
+                    ) : (
+                        <Text style={styles.primaryButtonText}>{isEditMode ? 'Update Session' : 'Save Session'}</Text>
+                    )}
+                </TouchableOpacity>
             </ScrollView>
         </>
     );
 };
 
 
+
 const SearchByKeyScreen = () => {
   const [selectedKey, setSelectedKey] = useState('A Minor');
   const [selectedGenre, setSelectedGenre] = useState('all');
+  const [bpmRange, setBpmRange] = useState([40, 220]);
+  const [isBpmFilterEnabled, setIsBpmFilterEnabled] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [songs, setSongs] = useState([]);
   const [error, setError] = useState('');
   const [showWheel, setShowWheel] = useState(true);
+  const [musicDatabase, setMusicDatabase] = useState(null);
+  const [availableGenres, setAvailableGenres] = useState([]);
+  const [displayedSongs, setDisplayedSongs] = useState([]);
+  const [songsPerPage, setSongsPerPage] = useState(50);
+  const [currentPage, setCurrentPage] = useState(1);
 
-  const genres = [ { label: 'All Genres', value: 'all' }, { label: 'Hip-Hop', value: 'hip-hop' }, { label: 'Pop', value: 'pop' }, { label: 'R&B', value: 'r&b' }, { label: 'Trap', value: 'trap' }, ];
-  const musicalKeys = [ { label: 'A Minor', value: 'A Minor' }, { label: 'C Minor', value: 'C Minor' }, { label: 'D Minor', value: 'D Minor' }, { label: 'E Minor', value: 'E Minor' }, { label: 'G Minor', value: 'G Minor' }, { label: 'F Minor', value: 'F Minor' }, { label: 'B Minor', value: 'B Minor' }, { label: 'F# Minor', value: 'F# Minor' }, { label: 'C# Minor', value: 'C# Minor' }, { label: 'G# Minor', value: 'G# Minor' }, { label: 'D# Minor', value: 'D# Minor' }, { label: 'A# Minor', value: 'A# Minor' }, { label: 'C Major', value: 'C Major' }, { label: 'D Major', value: 'D Major' }, { label: 'E Major', value: 'E Major' }, { label: 'F Major', value: 'F Major' }, { label: 'G Major', value: 'G Major' }, { label: 'A Major', value: 'A Major' }, { label: 'B Major', value: 'B Major' }, { label: 'F# Major', value: 'F# Major' }, { label: 'C# Major', value: 'C# Major' }, { label: 'G# Major', value: 'G# Major' }, { label: 'D# Major', value: 'D# Major' }, { label: 'A# Major', value: 'A# Major' }, ];
+  // Fallback genres and keys (used if database fails to load)
+  const genres = [ 
+    { label: 'All Genres', value: 'all' }, 
+    { label: 'Hip-Hop', value: 'hip-hop' }, 
+    { label: 'Pop', value: 'pop' }, 
+    { label: 'R&B', value: 'r&b' }, 
+    { label: 'Trap', value: 'trap' }, 
+  ];
+  const musicalKeys = [ 
+    { label: 'A Minor', value: 'A Minor' }, 
+    { label: 'C Minor', value: 'C Minor' }, 
+    { label: 'D Minor', value: 'D Minor' }, 
+    { label: 'E Minor', value: 'E Minor' }, 
+    { label: 'G Minor', value: 'G Minor' }, 
+    { label: 'F Minor', value: 'F Minor' }, 
+    { label: 'B Minor', value: 'B Minor' }, 
+    { label: 'F# Minor', value: 'F# Minor' }, 
+    { label: 'C# Minor', value: 'C# Minor' }, 
+    { label: 'G# Minor', value: 'G# Minor' }, 
+    { label: 'D# Minor', value: 'D# Minor' }, 
+    { label: 'A# Minor', value: 'A# Minor' }, 
+    { label: 'C Major', value: 'C Major' }, 
+    { label: 'D Major', value: 'D Major' }, 
+    { label: 'E Major', value: 'E Major' }, 
+    { label: 'F Major', value: 'F Major' }, 
+    { label: 'G Major', value: 'G Major' }, 
+    { label: 'A Major', value: 'A Major' }, 
+    { label: 'B Major', value: 'B Major' }, 
+    { label: 'F# Major', value: 'F# Major' }, 
+    { label: 'C# Major', value: 'C# Major' }, 
+    { label: 'G# Major', value: 'G# Major' }, 
+    { label: 'D# Major', value: 'D# Major' }, 
+    { label: 'A# Major', value: 'A# Major' }, 
+  ];
+
+  // Load music database and genres on component mount
+  useEffect(() => {
+    loadMusicDatabase();
+    loadAvailableGenres();
+  }, []);
+
+  const loadMusicDatabase = async () => {
+    try {
+      // For now, we'll use a local fetch to get the database
+      // In production, this could be bundled with the app or fetched from a CDN
+      const response = await fetch('http://192.168.50.242:5000/get_music_database');
+      const data = await response.json();
+      if (data.success) {
+        setMusicDatabase(data.database);
+      }
+    } catch (err) {
+      console.log('Using fallback database loading...');
+      // Fallback: try to load from local assets or use a smaller dataset
+      loadFallbackDatabase();
+    }
+  };
+
+  const loadAvailableGenres = async () => {
+    try {
+      const response = await fetch('http://192.168.50.242:5000/get_available_genres');
+      const data = await response.json();
+      if (data.success) {
+        const genres = data.genres.map(genre => ({
+          label: genre,
+          value: genre
+        }));
+        // Add "All Genres" option at the beginning
+        genres.unshift({ label: 'All Genres', value: 'all' });
+        setAvailableGenres(genres);
+      }
+    } catch (err) {
+      console.log('Failed to load genres from server, using fallback');
+      // Use fallback genres if server fails
+      setAvailableGenres(genres);
+    }
+  };
+
+  const loadFallbackDatabase = () => {
+    // This would be a smaller, bundled version of the database
+    // For now, we'll use the existing hardcoded approach
+    console.log('Using fallback database');
+  };
+
+
 
   const searchSongs = async () => {
     setIsLoading(true);
     setError('');
+    
     try {
+      // Call the server to get filtered songs
       const response = await fetch(SEARCH_BY_KEY_URL, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: selectedKey, genre: selectedGenre, limit: 20 }),
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          key: selectedKey,
+          genre: selectedGenre,
+          min_bpm: isBpmFilterEnabled ? bpmRange[0] : null,
+          max_bpm: isBpmFilterEnabled ? bpmRange[1] : null
+          // No limit - get all matching songs
+        })
       });
-      const result = await response.json();
-      if (result.success) { setSongs(result.songs || []); } 
-      else { setError(result.error || 'Failed to search songs'); setSongs([]); }
-    } catch (err) { setError('Failed to connect to server'); setSongs([]);
-    } finally { setIsLoading(false); }
+      
+      if (!response.ok) {
+        throw new Error(`Server error: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      
+      if (data.success === false) {
+        throw new Error(data.error || 'Failed to get songs');
+      }
+      
+      setSongs(data.songs || []);
+      // Reset pagination when new search is performed
+      setCurrentPage(1);
+      updateDisplayedSongs(data.songs || [], 1);
+      
+    } catch (err) {
+      console.error("Search Error:", err);
+      setError('Failed to search database');
+      setSongs([]);
+      setDisplayedSongs([]);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  useEffect(() => { searchSongs(); }, [selectedKey, selectedGenre]);
+  const updateDisplayedSongs = (allSongs, page) => {
+    const startIndex = (page - 1) * songsPerPage;
+    const endIndex = startIndex + songsPerPage;
+    const songsToShow = allSongs.slice(startIndex, endIndex);
+    setDisplayedSongs(songsToShow);
+  };
+
+  const loadMoreSongs = () => {
+    const nextPage = currentPage + 1;
+    const startIndex = (nextPage - 1) * songsPerPage;
+    
+    if (startIndex < songs.length) {
+      setCurrentPage(nextPage);
+      updateDisplayedSongs(songs, nextPage);
+    }
+  };
+
+  const hasMoreSongs = () => {
+    return (currentPage * songsPerPage) < songs.length;
+  };
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      searchSongs();
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [selectedKey, selectedGenre, bpmRange, isBpmFilterEnabled]);
+
   const handleKeyChange = (newKey) => setSelectedKey(newKey);
+
   const renderSongItem = ({ item }) => (
     <View style={styles.songCard}>
-      <View style={styles.songHeader}>
-        <Text style={styles.songTitle} numberOfLines={1}>{item.title || 'Unknown Title'}</Text>
-        {item.popularity && (<View style={styles.popularityBadge}><Text style={styles.popularityText}>{item.popularity}%</Text></View>)}
-      </View>
-      <Text style={styles.songArtist}>{item.artist || 'Unknown Artist'}</Text>
-      <View style={styles.songDetails}>
-        <Text style={styles.songBpm}>BPM: {item.bpm || 'N/A'}</Text>
-        <Text style={styles.songGenre}>{item.genre || 'Unknown'}</Text>
+      <View style={styles.songCardContent}>
+        {/* Cover Art */}
+        <View style={styles.songCoverContainer}>
+          {item.imageUrl ? (
+            <Image 
+              source={{ uri: item.imageUrl }} 
+              style={styles.songCoverArt}
+              resizeMode="cover"
+            />
+          ) : (
+            <View style={styles.songCoverPlaceholder}>
+              <MaterialCommunityIcons name="music" size={24} color="#666" />
+            </View>
+          )}
+        </View>
+        
+        {/* Song Info */}
+        <View style={styles.songInfoContainer}>
+          <View style={styles.songHeader}>
+            <Text style={styles.songTitle} numberOfLines={2}>
+              {item.title || 'Unknown Title'}
+            </Text>
+            {item.spotify_rank && (
+              <View style={styles.rankBadge}>
+                <Text style={styles.rankText}>#{item.spotify_rank}</Text>
+              </View>
+            )}
+          </View>
+          
+          <Text style={styles.songArtist} numberOfLines={1}>
+            {item.artist || 'Unknown Artist'}
+          </Text>
+          
+          <View style={styles.songDetails}>
+            {item.tempo && (
+              <View style={styles.detailItem}>
+                <MaterialCommunityIcons name="metronome" size={14} color="#8420d0" />
+                <Text style={styles.detailText}>
+                  {Math.round(item.tempo)} BPM
+                </Text>
+              </View>
+            )}
+            
+            {item.releaseDate && (
+              <View style={styles.detailItem}>
+                <MaterialCommunityIcons name="calendar" size={14} color="#8420d0" />
+                <Text style={styles.detailText}>
+                  {new Date(item.releaseDate).getFullYear()}
+                </Text>
+              </View>
+            )}
+            
+            {item.genres && item.genres.length > 0 && (
+              <View style={styles.detailItem}>
+                <MaterialCommunityIcons name="music-note" size={14} color="#8420d0" />
+                <Text style={styles.detailText} numberOfLines={1}>
+                  {(() => {
+                    const genre = item.genres[0].root || item.genres[0].sub?.[0] || 'Unknown Genre';
+                    // Capitalize the first letter of each word
+                    return genre.split(' ').map(word => 
+                      word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+                    ).join(' ');
+                  })()}
+                </Text>
+              </View>
+            )}
+          </View>
+        </View>
       </View>
     </View>
   );
 
-  return (
-    <ScrollView style={styles.searchContainer} showsVerticalScrollIndicator={false}>
+  const renderHeader = () => (
+    <View>
       <View style={styles.searchHeader}>
         <Text style={styles.searchTitle}>Search by Key</Text>
         <TouchableOpacity style={styles.toggleButton} onPress={() => setShowWheel(!showWheel)}>
           <MaterialCommunityIcons name={showWheel ? "view-list" : "circle-outline"} size={18} color="#8420d0" />
         </TouchableOpacity>
       </View>
+      
       <View style={styles.selectionSection}>
-        {showWheel ? ( <KeyWheel selectedKey={selectedKey} onKeyChange={handleKeyChange}/> ) : (
+        {showWheel ? ( 
+          <KeyWheel selectedKey={selectedKey} onKeyChange={handleKeyChange}/> 
+        ) : (
           <View style={styles.dropdownSection}>
             <Text style={styles.selectorLabel}>Key:</Text>
-            <RNPickerSelect value={selectedKey} onValueChange={setSelectedKey} items={musicalKeys} style={compactPickerStyles}/>
+            <CustomPicker
+                items={musicalKeys}
+                selectedValue={selectedKey}
+                onValueChange={setSelectedKey}
+                placeholder="Select a Key"
+            />
           </View>
         )}
+        
         <View style={styles.genreSection}>
-          <Text style={styles.selectorLabel}>Genre:</Text>
-          <RNPickerSelect value={selectedGenre} onValueChange={setSelectedGenre} items={genres} style={compactPickerStyles}/>
+          <Text style={styles.selectorLabel}>Genre (Optional):</Text>
+          <CustomPicker
+                items={availableGenres.length > 0 ? availableGenres : genres}
+                selectedValue={selectedGenre}
+                onValueChange={setSelectedGenre}
+                placeholder="Select a Genre"
+            />
         </View>
-      </View>
-      <View style={styles.resultsSection}>
-        <View style={styles.resultsHeader}>
-          <Text style={styles.resultsTitle}>Results</Text>
-          {songs.length > 0 && (<Text style={styles.resultsCount}>{songs.length} songs</Text>)}
+
+        <View style={styles.filterToggleContainer}>
+            <Text style={styles.filterToggleLabel}>Filter by BPM</Text>
+            <Switch
+                trackColor={{ false: "#767577", true: "#8420d0" }}
+                thumbColor={isBpmFilterEnabled ? "#f4f3f4" : "#f4f3f4"}
+                onValueChange={() => setIsBpmFilterEnabled(previousState => !previousState)}
+                value={isBpmFilterEnabled}
+            />
         </View>
-        {isLoading ? ( <View style={styles.loadingContainer}><ActivityIndicator size="large" color="#8420d0" /><Text style={styles.loadingText}>Searching...</Text></View>
-        ) : error ? ( <View style={styles.errorContainer}><MaterialCommunityIcons name="alert-circle" size={20} color="#FF453A" /><Text style={styles.errorText}>{error}</Text></View>
-        ) : songs.length === 0 ? ( <View style={styles.emptyContainer}><MaterialCommunityIcons name="music-off" size={32} color="#666" /><Text style={styles.emptyText}>No songs found</Text><Text style={styles.emptySubtext}>Try different filters</Text></View>
-        ) : ( <FlatList data={songs} renderItem={renderSongItem} keyExtractor={(item, index) => `${item.title || 'song'}-${index}`} scrollEnabled={false} showsVerticalScrollIndicator={false}/>
+
+        {isBpmFilterEnabled && (
+            <View style={styles.bpmSliderContainer}>
+                <View style={styles.bpmLabelContainer}>
+                    <Text style={styles.selectorLabel}>BPM Range</Text>
+                    <Text style={styles.bpmValueText}>
+                      {bpmRange[0] === bpmRange[1] ? bpmRange[0] : `${bpmRange[0]} - ${bpmRange[1]}`}
+                    </Text>
+                </View>
+                <MultiSlider
+                    values={[bpmRange[0], bpmRange[1]]}
+                    onValuesChange={(values) => setBpmRange(values)}
+                    min={40}
+                    max={220}
+                    step={1}
+                    allowOverlap={false}
+                    snapped
+                    minMarkerOverlapDistance={20}
+                    enabled={isBpmFilterEnabled}
+                    containerStyle={{
+                        alignSelf: 'center',
+                        height: 30,
+                    }}
+                    trackStyle={{
+                        height: 3,
+                        backgroundColor: '#555',
+                    }}
+                    selectedStyle={{
+                        backgroundColor: '#8420d0',
+                    }}
+                    markerStyle={{
+                        backgroundColor: '#FFFFFF',
+                        borderColor: '#8420d0',
+                        borderWidth: 2,
+                        height: 20,
+                        width: 20,
+                    }}
+                />
+            </View>
         )}
       </View>
-    </ScrollView>
+      
+      <View style={styles.resultsHeader}>
+        <Text style={styles.resultsTitle}>Results</Text>
+        {songs.length > 0 && (
+          <Text style={styles.resultsCount}>
+            {displayedSongs.length} of {songs.length} songs
+          </Text>
+        )}
+      </View>
+    </View>
+  );
+
+  if (isLoading) {
+    return (
+      <View style={styles.searchContainer}>
+        {renderHeader()}
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#8420d0" />
+          <Text style={styles.loadingText}>Searching...</Text>
+        </View>
+      </View>
+    );
+  }
+
+  if (error) {
+    return (
+      <View style={styles.searchContainer}>
+        {renderHeader()}
+        <View style={styles.errorContainer}>
+          <MaterialCommunityIcons name="alert-circle" size={20} color="#FF453A" />
+          <Text style={styles.errorText}>{error}</Text>
+        </View>
+      </View>
+    );
+  }
+
+  if (songs.length === 0) {
+    return (
+      <View style={styles.searchContainer}>
+        {renderHeader()}
+        <View style={styles.emptyContainer}>
+          <MaterialCommunityIcons name="music-off" size={32} color="#666" />
+          <Text style={styles.emptyText}>No songs found</Text>
+          <Text style={styles.emptySubtext}>Try different filters or keys</Text>
+        </View>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.searchContainer}>
+      <FlatList
+        data={displayedSongs}
+        renderItem={renderSongItem}
+        keyExtractor={(item, index) => item.uuid || item.title || `song-${index}`}
+        showsVerticalScrollIndicator={false}
+        ListHeaderComponent={renderHeader}
+        ListFooterComponent={() => (
+          <View>
+            {/* Load More Button */}
+            {hasMoreSongs() && (
+              <TouchableOpacity 
+                style={styles.loadMoreButton} 
+                onPress={loadMoreSongs}
+              >
+                <Text style={styles.loadMoreText}>
+                  Load More Songs ({songs.length - displayedSongs.length} remaining)
+                </Text>
+              </TouchableOpacity>
+            )}
+            
+            {/* Results Summary */}
+            {songs.length > 0 && (
+              <View style={styles.resultsSummary}>
+                <Text style={styles.resultsSummaryText}>
+                  Showing {displayedSongs.length} of {songs.length} songs
+                </Text>
+              </View>
+            )}
+          </View>
+        )}
+      />
+    </View>
   );
 };
 
@@ -406,40 +1070,269 @@ const SearchByArtistScreen = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [artistData, setArtistData] = useState(null);
   const [error, setError] = useState('');
-  const popularArtists = ['Drake', 'Travis Scott', 'Post Malone', 'Kendrick Lamar', 'Future'];
+  
+  // Updated popular artists list based on our comprehensive database
+  const popularArtists = [
+    'Drake', 'The Weeknd', 'Post Malone', 'Travis Scott', 'Kendrick Lamar',
+    'Future', 'Lil Baby', 'Juice WRLD', 'Ed Sheeran', 'Ariana Grande',
+    'Billie Eilish', 'Dua Lipa', 'Bad Bunny', 'J Balvin', 'Maluma'
+  ];
+  
   const searchArtist = async (artist) => {
     setIsLoading(true);
     setError('');
     setArtistData(null);
+    
     try {
-      const response = await fetch(SEARCH_ARTIST_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ artist }), });
+      const response = await fetch(SEARCH_ARTIST_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ artist }),
+      });
+      
       const result = await response.json();
-      if (result.success) { setArtistData(result); } 
-      else { setError(result.error || 'Artist not found'); }
-    } catch (err) { setError('Failed to connect to server');
-    } finally { setIsLoading(false); }
+      if (result.success) {
+        setArtistData(result);
+      } else {
+        setError(result.error || 'Artist not found');
+      }
+    } catch (err) {
+      console.error("Search By Artist Error:", err);
+      setError('Failed to connect to server');
+    } finally {
+      setIsLoading(false);
+    }
   };
-  const renderPopularArtist = (artist) => (<TouchableOpacity key={artist} style={styles.popularArtistButton} onPress={() => { setArtistName(artist); searchArtist(artist); }}><Text style={styles.popularArtistText}>{artist}</Text></TouchableOpacity>);
+  
+  const renderPopularArtist = (artist) => (
+    <TouchableOpacity
+      key={artist}
+      style={styles.popularArtistButton}
+      onPress={() => {
+        setArtistName(artist);
+        searchArtist(artist);
+      }}
+    >
+      <Text style={styles.popularArtistText}>{artist}</Text>
+    </TouchableOpacity>
+  );
+  
   const renderKeyAnalysis = () => {
     if (!artistData?.most_used_keys) return null;
-    return (<View style={styles.analysisSection}><Text style={styles.analysisSectionTitle}>Most Used Keys</Text><View style={styles.keyGrid}>{artistData.most_used_keys.map((key, index) => (<View key={`${key}-${index}`} style={styles.keyBadge}><Text style={styles.keyBadgeText}>{key}</Text><Text style={styles.keyBadgeRank}>#{index + 1}</Text></View>))}</View></View>);
+    
+    return (
+      <View style={styles.analysisSection}>
+        <Text style={styles.analysisSectionTitle}>Most Used Keys</Text>
+        <View style={styles.keyGrid}>
+          {artistData.most_used_keys.map((key, index) => (
+            <View key={`${key}-${index}`} style={styles.keyBadge}>
+              <Text style={styles.keyBadgeText}>{key}</Text>
+              <Text style={styles.keyBadgeRank}>#{index + 1}</Text>
+            </View>
+          ))}
+        </View>
+      </View>
+    );
   };
+  
   const renderBpmAnalysis = () => {
     if (!artistData?.bpm_range) return null;
-    return (<View style={styles.analysisSection}><Text style={styles.analysisSectionTitle}>BPM Analysis</Text><View style={styles.bpmContainer}><View style={styles.bpmStat}><Text style={styles.bpmStatLabel}>Min</Text><Text style={styles.bpmStatValue}>{artistData.bpm_range?.min || artistData.bpm_range.min}</Text></View><View style={styles.bpmStat}><Text style={styles.bpmStatLabel}>Avg</Text><Text style={styles.bpmStatValue}>{artistData.bpm_range?.avg || artistData.bpm_range.avg}</Text></View><View style={styles.bpmStat}><Text style={styles.bpmStatLabel}>Max</Text><Text style={styles.bpmStatValue}>{artistData.bpm_range?.max || artistData.bpm_range.max}</Text></View></View><Text style={styles.bpmRecommendation}>💡 Recommended BPM range: {artistData.bpm_range.min}-{artistData.bpm_range.max}</Text></View>);
+    
+    return (
+      <View style={styles.analysisSection}>
+        <Text style={styles.analysisSectionTitle}>BPM Analysis</Text>
+        <View style={styles.bpmContainer}>
+          <View style={styles.bpmStat}>
+            <Text style={styles.bpmStatLabel}>Min</Text>
+            <Text style={styles.bpmStatValue}>{artistData.bpm_range.min}</Text>
+          </View>
+          <View style={styles.bpmStat}>
+            <Text style={styles.bpmStatLabel}>Avg</Text>
+            <Text style={styles.bpmStatValue}>{artistData.bpm_range.avg}</Text>
+          </View>
+          <View style={styles.bpmStat}>
+            <Text style={styles.bpmStatLabel}>Max</Text>
+            <Text style={styles.bpmStatValue}>{artistData.bpm_range.max}</Text>
+          </View>
+        </View>
+        <Text style={styles.bpmRecommendation}>
+          💡 Recommended BPM range: {artistData.bpm_range.min}-{artistData.bpm_range.max}
+        </Text>
+      </View>
+    );
   };
+  
+  const renderGenreAnalysis = () => {
+    if (!artistData?.preferred_genres) return null;
+    
+    return (
+      <View style={styles.analysisSection}>
+        <Text style={styles.analysisSectionTitle}>Preferred Genres</Text>
+        <View style={styles.genreContainer}>
+          {artistData.preferred_genres.map((genre, index) => (
+            <View key={`${genre}-${index}`} style={styles.genreBadge}>
+              <Text style={styles.genreBadgeText}>{genre}</Text>
+            </View>
+          ))}
+        </View>
+      </View>
+    );
+  };
+  
   const renderTopSongs = () => {
     if (!artistData?.top_songs) return null;
-    return (<View style={styles.analysisSection}><Text style={styles.analysisSectionTitle}>Top Songs</Text>{artistData.top_songs.map((song, index) => (<View key={`${song.title || 'song'}-${index}`} style={styles.artistSongCard}><View style={styles.artistSongHeader}><Text style={styles.artistSongTitle} numberOfLines={1}>{song.title || 'Unknown Title'}</Text>{song.popularity && (<Text style={styles.artistSongPopularity}>{song.popularity}%</Text>)}</View><View style={styles.artistSongDetails}><Text style={styles.artistSongKey}>Key: {song.key || 'N/A'}</Text><Text style={styles.artistSongBpm}>BPM: {song.bpm || 'N/A'}</Text></View></View>))}</View>);
+    
+    return (
+      <View style={styles.analysisSection}>
+        <Text style={styles.analysisSectionTitle}>
+          Top Songs
+        </Text>
+        {artistData.top_songs.map((song, index) => (
+          <View key={`${song.title || 'song'}-${index}`} style={styles.songCard}>
+            <View style={styles.songCardContent}>
+              {/* Cover Art */}
+              <View style={styles.songCoverContainer}>
+                {song.imageUrl ? (
+                  <Image 
+                    source={{ uri: song.imageUrl }} 
+                    style={styles.songCoverArt}
+                    resizeMode="cover"
+                  />
+                ) : (
+                  <View style={styles.songCoverPlaceholder}>
+                    <MaterialCommunityIcons name="music" size={24} color="#666" />
+                  </View>
+                )}
+              </View>
+              
+              {/* Song Info */}
+              <View style={styles.songInfoContainer}>
+                <View style={styles.songHeader}>
+                  <Text style={styles.songTitle} numberOfLines={2}>
+                    {song.title || 'Unknown Title'}
+                  </Text>
+                  {song.key && song.key !== 'N/A' && (
+                    <View style={styles.rankBadge}>
+                      <Text style={styles.rankText}>{song.key}</Text>
+                    </View>
+                    )}
+                </View>
+                
+                <Text style={styles.songArtist} numberOfLines={1}>
+                  {song.artist || 'Unknown Artist'}
+                </Text>
+                
+                <View style={styles.songDetails}>
+                  {song.bpm && song.bpm !== 'N/A' && (
+                    <View style={styles.detailItem}>
+                      <MaterialCommunityIcons name="metronome" size={14} color="#8420d0" />
+                      <Text style={styles.detailText}>
+                        {Math.round(song.bpm)} BPM
+                      </Text>
+                    </View>
+                  )}
+                  
+                  {song.release_date && song.release_date !== 'N/A' && (
+                    <View style={styles.detailItem}>
+                      <MaterialCommunityIcons name="calendar" size={14} color="#8420d0" />
+                      <Text style={styles.detailText}>
+                        {new Date(song.release_date).getFullYear()}
+                      </Text>
+                    </View>
+                  )}
+                  
+                  {song.genres && song.genres.length > 0 && (
+                    <View style={styles.detailItem}>
+                      <MaterialCommunityIcons name="music-note" size={14} color="#8420d0" />
+                      <Text style={styles.detailText} numberOfLines={1}>
+                        {song.genres[0] || 'Unknown Genre'}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              </View>
+            </View>
+          </View>
+        ))}
+      </View>
+    );
   };
+  
   return (
     <View style={styles.featureScreen}>
       <Text style={styles.featureTitle}>Artist Analysis</Text>
-      <View style={styles.searchContainer2}><TextInput placeholder="Enter Artist Name" placeholderTextColor="#888" style={styles.inputField} value={artistName} onChangeText={setArtistName} onSubmitEditing={() => artistName && searchArtist(artistName)}/><TouchableOpacity style={styles.searchIconButton} onPress={() => artistName && searchArtist(artistName)} disabled={isLoading}><MaterialCommunityIcons name="magnify" size={24} color={isLoading ? "#666" : "#8420d0"} /></TouchableOpacity></View>
-      <View style={styles.popularArtistsContainer}><Text style={styles.popularArtistsTitle}>Popular Artists:</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.popularArtistsScroll}>{popularArtists.map(renderPopularArtist)}</ScrollView></View>
-      {isLoading && (<View style={styles.loadingContainer}><ActivityIndicator size="large" color="#8420d0" /><Text style={styles.loadingText}>Analyzing {artistName}...</Text></View>)}
-      {error && (<View style={styles.errorContainer}><MaterialCommunityIcons name="alert-circle" size={24} color="#FF453A" /><Text style={styles.errorText}>{error}</Text></View>)}
-      {artistData && (<ScrollView style={styles.analysisResults} showsVerticalScrollIndicator={false}><Text style={styles.analysisTitle}>Analysis for {artistData.artist}</Text>{artistData.source && (<Text style={styles.dataSource}>Data source: {artistData.source === 'curated' ? 'Curated Database' : 'Genius API'}</Text>)}{renderKeyAnalysis()}{renderBpmAnalysis()}{renderTopSongs()}</ScrollView>)}
+      
+      <View style={styles.searchContainer2}>
+        <TextInput
+          placeholder="Enter Artist Name"
+          placeholderTextColor="#888"
+          style={styles.inputField}
+          value={artistName}
+          onChangeText={setArtistName}
+          onSubmitEditing={() => artistName && searchArtist(artistName)}
+        />
+        <TouchableOpacity
+          style={styles.searchIconButton}
+          onPress={() => artistName && searchArtist(artistName)}
+          disabled={isLoading}
+        >
+          <MaterialCommunityIcons
+            name="magnify"
+            size={24}
+            color={isLoading ? "#666" : "#8420d0"}
+          />
+        </TouchableOpacity>
+      </View>
+      
+      <View style={styles.popularArtistsContainer}>
+        <Text style={styles.popularArtistsTitle}>Popular Artists:</Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.popularArtistsScroll}>
+          {popularArtists.map(renderPopularArtist)}
+        </ScrollView>
+      </View>
+      
+      {isLoading && (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#8420d0" />
+          <Text style={styles.loadingText}>Analyzing {artistName}...</Text>
+        </View>
+      )}
+      
+      {error && (
+        <View style={styles.errorContainer}>
+          <MaterialCommunityIcons name="alert-circle" size={24} color="#FF453A" />
+          <Text style={styles.errorText}>{error}</Text>
+        </View>
+      )}
+      
+      {artistData && (
+        <ScrollView style={styles.analysisResults} showsVerticalScrollIndicator={false}>
+          <Text style={styles.analysisTitle}>Analysis for {artistData.artist}</Text>
+          
+          {/* Artist Profile Picture */}
+          {artistData.profile_image && (
+            <View style={styles.artistProfileContainer}>
+              <Image 
+                source={{ uri: artistData.profile_image }} 
+                style={styles.artistProfileImage}
+                resizeMode="cover"
+              />
+            </View>
+          )}
+          
+          {artistData.source && (
+            <Text style={styles.dataSource}>
+              Data source: {artistData.source === 'comprehensive_database' ? 'Comprehensive Database' : 
+                           artistData.source === 'legacy_curated' ? 'Legacy Database' : artistData.source}
+            </Text>
+          )}
+          
+          {renderKeyAnalysis()}
+          {renderBpmAnalysis()}
+          {renderGenreAnalysis()}
+          {renderTopSongs()}
+        </ScrollView>
+      )}
     </View>
   );
 };
@@ -457,23 +1350,34 @@ const EnhancedDetectScreen = () => {
   const rippleAnim = useRef(new Animated.Value(0)).current;
   const confidenceAnim = useRef(new Animated.Value(0)).current;
 
-  const getArtistsForKey = (detectedKey, detectedBpm) => {
-    const artistDatabase = { 'Drake': { mostUsedKeys: ['A Minor', 'D Minor', 'E Minor', 'C Major'], bpmRange: { min: 70, max: 140, avg: 105 }, topSongs: [ { title: "God's Plan", key: 'A Minor', bpm: 77, popularity: 98 }, { title: 'Hotline Bling', key: 'D Minor', bpm: 135, popularity: 94 }, { title: 'In My Feelings', key: 'E Minor', bpm: 91, popularity: 92 }, { title: 'One Dance', key: 'C Major', bpm: 104, popularity: 89 } ] }, 'Travis Scott': { mostUsedKeys: ['A Minor', 'G Minor', 'D Major', 'E Major'], bpmRange: { min: 130, max: 180, avg: 155 }, topSongs: [ { title: 'Sicko Mode', key: 'A Minor', bpm: 155, popularity: 95 }, { title: 'Antidote', key: 'D Major', bpm: 140, popularity: 88 }, { title: 'Goosebumps', key: 'E Major', bpm: 130, popularity: 90 }, { title: 'Highest in the Room', key: 'G Minor', bpm: 130, popularity: 87 } ] }, 'Post Malone': { mostUsedKeys: ['D Minor', 'E Minor', 'C Major', 'G Major'], bpmRange: { min: 90, max: 160, avg: 125 }, topSongs: [ { title: 'Congratulations', key: 'D Minor', bpm: 123, popularity: 89 }, { title: 'Rockstar', key: 'E Minor', bpm: 160, popularity: 96 }, { title: 'Sunflower', key: 'C Major', bpm: 90, popularity: 91 }, { title: 'Circles', key: 'G Major', bpm: 120, popularity: 87 } ] }, 'Kendrick Lamar': { mostUsedKeys: ['A Minor', 'D Minor', 'G Minor', 'D Major'], bpmRange: { min: 80, max: 160, avg: 120 }, topSongs: [ { title: 'HUMBLE.', key: 'A Minor', bpm: 150, popularity: 92 }, { title: 'DNA', key: 'G Minor', bpm: 95, popularity: 85 }, { title: 'Money Trees', key: 'D Major', bpm: 130, popularity: 78 }, { title: 'Alright', key: 'D Minor', bpm: 100, popularity: 82 } ] }, 'Future': { mostUsedKeys: ['C Minor', 'A Minor', 'E Major', 'G Minor'], bpmRange: { min: 130, max: 180, avg: 155 }, topSongs: [ { title: 'Mask Off', key: 'C Minor', bpm: 150, popularity: 88 }, { title: 'Life Is Good', key: 'E Major', bpm: 140, popularity: 85 }, { title: 'Jumpman', key: 'A Minor', bpm: 135, popularity: 82 }, { title: 'March Madness', key: 'G Minor', bpm: 145, popularity: 80 } ] }, 'The Weeknd': { mostUsedKeys: ['G Minor', 'A Minor', 'E Minor', 'D Minor'], bpmRange: { min: 80, max: 140, avg: 110 }, topSongs: [ { title: 'Starboy', key: 'G Minor', bpm: 186, popularity: 90 }, { title: 'Blinding Lights', key: 'G Minor', bpm: 171, popularity: 94 }, { title: 'The Hills', key: 'A Minor', bpm: 113, popularity: 88 }, { title: 'Can\'t Feel My Face', key: 'E Minor', bpm: 108, popularity: 86 } ] }, 'Juice WRLD': { mostUsedKeys: ['E Minor', 'A Minor', 'D Minor', 'G Major'], bpmRange: { min: 70, max: 140, avg: 105 }, topSongs: [ { title: 'Lucid Dreams', key: 'E Minor', bpm: 84, popularity: 93 }, { title: 'All Girls Are The Same', key: 'A Minor', bpm: 85, popularity: 78 }, { title: 'Robbery', key: 'D Minor', bpm: 140, popularity: 82 }, { title: 'Legends', key: 'G Major', bpm: 72, popularity: 75 } ] }, 'Lil Baby': { mostUsedKeys: ['A Minor', 'C Minor', 'D Minor', 'G Minor'], bpmRange: { min: 120, max: 160, avg: 140 }, topSongs: [ { title: 'Drip Too Hard', key: 'A Minor', bpm: 140, popularity: 85 }, { title: 'Yes Indeed', key: 'C Minor', bpm: 143, popularity: 82 }, { title: 'Life Goes On', key: 'D Minor', bpm: 135, popularity: 78 }, { title: 'Emotionally Scarred', key: 'G Minor', bpm: 125, popularity: 80 } ] } };
-    const matchingArtists = [];
-    Object.entries(artistDatabase).forEach(([artistName, data]) => {
-      if (data.mostUsedKeys.includes(detectedKey)) {
-        const keyMatchRank = data.mostUsedKeys.indexOf(detectedKey) + 1;
-        const bpmMatch = detectedBpm >= data.bpmRange.min && detectedBpm <= data.bpmRange.max;
-        const bpmDistance = Math.abs(detectedBpm - data.bpmRange.avg);
-        const songsInKey = data.topSongs.filter(song => song.key === detectedKey);
-        matchingArtists.push({ name: artistName, keyRank: keyMatchRank, bpmMatch, bpmDistance, avgBpm: data.bpmRange.avg, songsInKey, confidence: bpmMatch ? (keyMatchRank === 1 ? 95 : 85) : (keyMatchRank === 1 ? 75 : 65) });
+  const getArtistsForKey = async (detectedKey, detectedBpm) => {
+    try {
+      const response = await fetch(ARTISTS_BY_KEY_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: detectedKey }),
+      });
+      
+      const result = await response.json();
+      if (result.success && result.artists) {
+        // Transform the database format to match the expected format
+        return result.artists.map((artist, index) => ({
+          name: artist.artist,
+          keyRank: index + 1,
+          avgBpm: artist.sample_song ? 'N/A' : 'N/A', // We don't have avg BPM per artist yet
+          confidence: 85, // Default confidence since we don't calculate this
+          bpmMatch: false, // We don't have BPM matching logic yet
+          songsInKey: [{
+            title: artist.sample_song,
+            bpm: 'N/A'
+          }]
+        }));
       }
-    });
-    return matchingArtists.sort((a, b) => {
-      if (a.bpmMatch !== b.bpmMatch) return b.bpmMatch - a.bpmMatch;
-      if (a.keyRank !== b.keyRank) return a.keyRank - b.keyRank;
-      return a.bpmDistance - b.bpmDistance;
-    }).slice(0, 5);
+      return [];
+    } catch (err) {
+      console.error('Failed to get artists for key:', err);
+      return [];
+    }
   };
 
   const getChordProgressions = async (key) => {
@@ -489,8 +1393,10 @@ const EnhancedDetectScreen = () => {
   useEffect(() => {
     if (analysisResult?.key) {
       getChordProgressions(analysisResult.key);
-      const artists = getArtistsForKey(analysisResult.key, analysisResult.bpm);
-      setSuggestedArtists(artists);
+      // Get artists asynchronously
+      getArtistsForKey(analysisResult.key, analysisResult.bpm).then(artists => {
+        setSuggestedArtists(artists);
+      });
     }
   }, [analysisResult?.key, analysisResult?.bpm]);
 
@@ -528,8 +1434,6 @@ const EnhancedDetectScreen = () => {
         allowsRecordingIOS: isRecordingActive, // Set true for recording, false for playback
         playsInSilentModeIOS: true, // Maintain this for overall app behavior
         shouldDuckAndroid: false, // Maintain this for overall app behavior
-        interruptionModeIOS: Audio.INTERRUPTION_MODE_IOS_DO_NOT_MIX, // Maintain this
-        interruptionModeAndroid: Audio.INTERRUPTION_MODE_ANDROID_DO_NOT_MIX, // Maintain this
         defaultToSpeaker: true, // Maintain this for desired speaker output
       });
       console.log(`DEBUG: Audio mode set for recording: ${isRecordingActive}`);
@@ -544,7 +1448,6 @@ const EnhancedDetectScreen = () => {
       if (status !== 'granted') { setError('Microphone permission was not granted.'); return; }
       if (recording) return;
 
-      // *** Set audio mode for recording BEFORE preparing/starting recording ***
       await setRecordingAudioMode(true);
 
       const newRecording = new Audio.Recording();
@@ -555,7 +1458,6 @@ const EnhancedDetectScreen = () => {
     } catch (err) {
       console.error('Failed to start recording', err);
       setError('Failed to start recording.');
-      // Ensure audio mode is reset if start fails quickly
       await setRecordingAudioMode(false);
     }
   };
@@ -568,11 +1470,10 @@ const EnhancedDetectScreen = () => {
       await activeRecording.stopAndUnloadAsync();
       const uri = activeRecording.getURI();
 
-      // *** Set audio mode back to playback AFTER stopping recording ***
-      await setRecordingAudioMode(false); // Switch back to playback-friendly mode
+      await setRecordingAudioMode(false);
 
       const formData = new FormData();
-      formData.append('audio', { uri: Platform.OS === 'ios' ? uri.replace('file://', '') : uri, type: 'audio/x-m4a', name: 'recording.m4m', }); // Changed type to m4m if it was m4a for consistency
+      formData.append('audio', { uri: Platform.OS === 'ios' ? uri.replace('file://', '') : uri, type: 'audio/x-m4a', name: 'recording.m4m', });
       const response = await fetch(ANALYZE_URL, { method: 'POST', body: formData, headers: { 'Content-Type': 'multipart/form-data' }, });
       const result = await response.json();
       if (result.error) { setError(`Analysis failed: ${result.error}`); }
@@ -580,7 +1481,6 @@ const EnhancedDetectScreen = () => {
     } catch (e) {
       console.error('stopRecordingAndAnalyze error:', e);
       setError('Could not analyze audio.');
-      // Ensure audio mode is reset if stop/analyze fails
       await setRecordingAudioMode(false);
     } finally {
       setRecording(null);
@@ -590,7 +1490,7 @@ const EnhancedDetectScreen = () => {
 
   const handleListenPress = async () => {
     setError('');
-    if (recording) { await stopRecordingAndAnalyze(recording); } 
+    if (recording) { await stopRecordingAndAnalyze(recording); }
     else { await startRecording(); }
   };
 
@@ -606,8 +1506,9 @@ const EnhancedDetectScreen = () => {
   const getButtonContent = () => {
     if (isAnalyzing) return <ActivityIndicator size="large" color="#FFFFFF" />;
     if (recording) return <WaveformAnimation />;
-    return <MaterialCommunityIcons name="music-circle-outline" size={100} color="white" />;
+    return <Image source={require('./assets/logoicon.png')} style={styles.detectButtonIcon} />;
   };
+
 
   const renderArtistSuggestions = () => {
     if (suggestedArtists.length === 0) return null;
@@ -682,6 +1583,20 @@ const EnhancedDetectScreen = () => {
               <View style={styles.detectedSongContainer}><View style={styles.suggestionCard}><Text style={styles.suggestionTitle}>No Song Detected</Text><Text style={styles.suggestionArtist}>But we analyzed the musical elements!</Text></View></View>
             )}
             {renderArtistSuggestions()}
+            {analysisResult.database_insights && analysisResult.common_artists && analysisResult.common_artists.length > 0 && (
+              <View style={styles.detectedSongContainer}>
+                <Text style={styles.suggestionsTitle}>📊 Database Insights</Text>
+                <Text style={styles.suggestionsSubtitle}>Based on our comprehensive music database:</Text>
+                <View style={styles.databaseInsightsCard}>
+                  <Text style={styles.databaseInsightsText}>
+                    Found {analysisResult.common_artists.length} artists commonly using {analysisResult.key}
+                  </Text>
+                  <Text style={styles.databaseInsightsText}>
+                    Top artist: {analysisResult.common_artists[0]?.artist} ({analysisResult.common_artists[0]?.song_count} songs)
+                  </Text>
+                </View>
+              </View>
+            )}
             {chordProgressions.length > 0 && (
               <View style={styles.detectedSongContainer}>
                 <Text style={styles.suggestionsTitle}>🎹 Common Chord Progressions</Text>
@@ -708,8 +1623,9 @@ const EnhancedDetectScreen = () => {
   );
 };
 
-export default function App() {
+function App() {
   const [currentScreen, setCurrentScreen] = useState('MainMenu');
+  const [navigationParams, setNavigationParams] = useState(null);
   const [appState, setAppState] = useState({
       dropboxAuth: null,
       selectedFolder: null,
@@ -723,16 +1639,17 @@ export default function App() {
         shouldDuckAndroid: false,
         defaultToSpeaker: true,
       });
-      
+
       console.log('Expo AV audio mode set successfully.');
     } catch (e) {
       console.error('Failed to set Expo AV audio mode:', e);
     }
   };
   setAudioMode();
-}, []); // Empty dependency array means this runs once on component mount
-  const navigate = (screen) => {
+}, []);
+  const navigate = (screen, params = null) => {
     setCurrentScreen(screen);
+    setNavigationParams(params);
   };
 
   const renderScreen = () => {
@@ -744,9 +1661,9 @@ export default function App() {
       case 'Detect':
         return <EnhancedDetectScreen />;
       case 'Sessions':
-        return <SessionsScreen navigate={navigate} />;
+        return <SessionsScreen navigate={navigate} db={db} />;
       case 'NewSession':
-        return <NewSessionScreen navigate={navigate} appState={appState} setAppState={setAppState} />;
+        return <NewSessionScreen navigate={navigate} appState={appState} setAppState={setAppState} db={db} params={navigationParams} />;
       default:
         return <MainMenu navigate={navigate} />;
     }
@@ -754,1000 +1671,65 @@ export default function App() {
 
   return (
     <SafeAreaView style={styles.container}>
+      <StatusBar style="light" />
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigate('MainMenu')} style={styles.headerTouchable} disabled={currentScreen === 'MainMenu'}>
+        <View style={styles.headerLeft}>
             {currentScreen !== 'MainMenu' && (
-              <MaterialCommunityIcons name="arrow-left" size={28} color="#FFFFFF" style={styles.backIcon} />
+              <TouchableOpacity onPress={() => navigate('MainMenu')}>
+                <MaterialCommunityIcons name="arrow-left" size={28} color="#FFFFFF" />
+              </TouchableOpacity>
             )}
-            <Image source={require('./assets/logo.png')} style={styles.logoImage} resizeMode="contain" />
-        </TouchableOpacity>
-        {currentScreen === 'MainMenu' && <Text style={styles.subtitle}>A Producer Companion App</Text>}
+        </View>
+        <View style={styles.headerCenter}>
+            <Image source={require('./assets/logo.png')} style={styles.logoImage} />
+        </View>
+        <View style={styles.headerRight} />
       </View>
+      {currentScreen === 'MainMenu' && <Text style={styles.subtitle}>A Producer Companion App</Text>}
       {renderScreen()}
     </SafeAreaView>
   );
 }
 
-// COMPLETE STYLES OBJECT
-const styles = StyleSheet.create({
-  // Main app styles
-  container: {
-    flex: 1,
-    backgroundColor: '#121212',
-    alignItems: 'center',
-  },
-  header: {
-    marginTop: 60,
-    marginBottom: 20,
-    alignItems: 'center',
-    paddingHorizontal: 20,
-  },
-  headerTouchable: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 10,
-  },
-  backIcon: {
-    marginRight: 10,
-  },
-  logoImage: {
-    width: 300,
-    height: 100,
-    marginBottom: -20,
-  },
-  subtitle: {
-    fontSize: 16,
-    color: '#B3B3B3',
-    marginTop: 8,
-    textAlign: 'center',
-  },
-  mainContent: {
-    flex: 1,
-    width: '90%',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  menuButton: {
-    backgroundColor: '#282828',
-    borderRadius: 12,
-    paddingVertical: 20,
-    paddingHorizontal: 25,
-    width: '100%',
-    marginBottom: 15,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  menuIcon: {
-    marginRight: 15,
-  },
-  menuButtonText: {
-    color: '#FFFFFF',
-    fontSize: 18,
-    fontWeight: '600',
-  },
-  featureScreen: {
-    flex: 1,
-    width: '90%',
-    alignItems: 'center',
-    paddingTop: 20,
-  },
-  featureScreenContainer: {
-    flex: 1,
-    width: '90%',
-  },
-  featureScreenContent: {
-    alignItems: 'center',
-    paddingTop: 20,
-  },
-  featureTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-    marginBottom: 20,
-  },
-  artistSuggestionCard: {
-    backgroundColor: '#282828',
-    borderRadius: 8,
-    padding: 15,
-    marginBottom: 10,
-    borderLeftWidth: 4,
-    borderLeftColor: '#8420d0',
-  },
-  artistSuggestionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  artistSuggestionName: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-    flex: 1,
-  },
-  artistBadges: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  keyRankBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-    marginLeft: 8,
-  },
-  keyRankText: {
-    color: '#FFFFFF',
-    fontSize: 11,
-    fontWeight: 'bold',
-  },
-  bpmMatchBadge: {
-    backgroundColor: '#FF6B35',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-    marginLeft: 6,
-  },
-  bpmMatchText: {
-    color: '#FFFFFF',
-    fontSize: 11,
-    fontWeight: 'bold',
-  },
-  artistSuggestionDetails: {
-    fontSize: 14,
-    color: '#B3B3B3',
-    marginBottom: 10,
-  },
-  songsInKeyContainer: {
-    backgroundColor: '#1C1C1C',
-    borderRadius: 6,
-    padding: 10,
-    marginTop: 8,
-  },
-  songsInKeyTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#8420d0',
-    marginBottom: 6,
-  },
-  songInKeyText: {
-    fontSize: 13,
-    color: '#CCCCCC',
-    marginBottom: 3,
-    paddingLeft: 5,
-  },
-  producerTipCard: {
-    flexDirection: 'row',
-    backgroundColor: '#1A2F1A',
-    borderRadius: 8,
-    padding: 12,
-    marginTop: 10,
-    borderWidth: 1,
-    borderColor: '#8420d0',
-  },
-  producerTipContent: {
-    flex: 1,
-    marginLeft: 10,
-  },
-  producerTipTitle: {
-    color: '#8420d0',
-    fontSize: 14,
-    fontWeight: 'bold',
-    marginBottom: 4,
-  },
-  producerTipText: {
-    color: '#CCCCCC',
-    fontSize: 13,
-    lineHeight: 18,
-  },
+// Authentication wrapper component
+function AuthenticatedApp() {
+  const [user, setUser] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
 
-  // SearchByKey specific styles
-  searchContainer: {
-    flex: 1,
-    backgroundColor: '#121212',
-    width: '100%',
-  },
-  searchHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingTop: 10,
-    paddingBottom: 15,
-  },
-  searchTitle: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-  },
-  toggleButton: {
-    backgroundColor: '#282828',
-    padding: 8,
-    borderRadius: 20,
-  },
-  selectionSection: {
-    backgroundColor: '#1A1A1A',
-    marginHorizontal: 15,
-    borderRadius: 12,
-    paddingVertical: 10,
-    marginBottom: 15,
-  },
-  dropdownSection: {
-    paddingHorizontal: 15,
-    paddingVertical: 10,
-  },
-  genreSection: {
-    paddingHorizontal: 15,
-    paddingBottom: 10,
-  },
-  selectorLabel: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '600',
-    marginBottom: 8,
-  },
-  resultsSection: {
-    paddingHorizontal: 20,
-    flex: 1,
-  },
-  resultsHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 15,
-  },
-  resultsTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-  },
-  resultsCount: {
-    fontSize: 12,
-    color: '#8420d0',
-    fontWeight: '600',
-  },
+  useEffect(() => {
+    // Listen for authentication state changes
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        setUser(user);
+      } else {
+        // Sign in anonymously if no user
+        signInAnonymously(auth)
+          .then((result) => {
+            setUser(result.user);
+            console.log('Signed in anonymously');
+          })
+          .catch((error) => {
+            console.error('Anonymous sign-in failed:', error);
+          });
+      }
+      setIsLoading(false);
+    });
 
-  // SearchByArtist specific styles
-  searchContainer2: {
-    flexDirection: 'row',
-    width: '100%',
-    alignItems: 'center',
-    marginBottom: 15,
-  },
-  inputField: {
-    backgroundColor: '#282828',
-    color: '#FFFFFF',
-    flex: 1,
-    borderRadius: 8,
-    padding: 15,
-    fontSize: 16,
-    marginRight: 10,
-  },
-  searchIconButton: {
-    backgroundColor: '#282828',
-    padding: 15,
-    borderRadius: 8,
-  },
-  popularArtistsContainer: {
-    width: '100%',
-    marginBottom: 20,
-  },
-  popularArtistsTitle: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
-    marginBottom: 10,
-  },
-  popularArtistsScroll: {
-    flexDirection: 'row',
-  },
-  popularArtistButton: {
-    backgroundColor: '#8420d0',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 20,
-    marginRight: 8,
-  },
-  popularArtistText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  analysisSection: {
-    width: '100%',
-    backgroundColor: '#282828',
-    borderRadius: 12,
-    padding: 15,
-    marginBottom: 15,
-  },
-  analysisSectionTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-    marginBottom: 12,
-  },
-  keyGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-  },
-  keyBadge: {
-    backgroundColor: '#8420d0',
-    borderRadius: 8,
-    padding: 10,
-    marginBottom: 8,
-    width: '48%',
-    alignItems: 'center',
-  },
-  keyBadgeText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  keyBadgeRank: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    marginTop: 2,
-  },
-  bpmContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    marginBottom: 10,
-  },
-  bpmStat: {
-    alignItems: 'center',
-  },
-  bpmStatLabel: {
-    color: '#B3B3B3',
-    fontSize: 14,
-    marginBottom: 4,
-  },
-  bpmStatValue: {
-    color: '#FFFFFF',
-    fontSize: 24,
-    fontWeight: 'bold',
-  },
-  bpmRecommendation: {
-    color: '#8420d0',
-    fontSize: 14,
-    textAlign: 'center',
-    fontStyle: 'italic',
-  },
-  artistSongCard: {
-    backgroundColor: '#1C1C1C',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 8,
-  },
-  artistSongHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 6,
-  },
-  artistSongTitle: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
-    flex: 1,
-  },
-  artistSongPopularity: {
-    color: '#8420d0',
-    fontSize: 12,
-    fontWeight: 'bold',
-  },
-  artistSongDetails: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  artistSongKey: {
-    color: '#8420d0',
-    fontSize: 14,
-  },
-  artistSongBpm: {
-    color: '#B3B3B3',
-    fontSize: 14,
-  },
-  analysisResults: {
-    width: '100%',
-    flex: 1,
-  },
-  analysisTitle: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-    marginBottom: 10,
-    textAlign: 'center',
-  },
-  dataSource: {
-    fontSize: 12,
-    color: '#B3B3B3',
-    textAlign: 'center',
-    marginBottom: 20,
-  },
+    return () => unsubscribe();
+  }, []);
 
-  // Song card styles
-  songCard: {
-    backgroundColor: '#282828',
-    borderRadius: 12,
-    padding: 15,
-    marginBottom: 10,
-  },
-  songHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 5,
-  },
-  songTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-    flex: 1,
-  },
-  popularityBadge: {
-    backgroundColor: '#8420d0',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-  },
-  popularityText: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: 'bold',
-  },
-  songArtist: {
-    fontSize: 14,
-    color: '#B3B3B3',
-    marginBottom: 8,
-  },
-  songDetails: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  songBpm: {
-    fontSize: 14,
-    color: '#FFFFFF',
-    fontWeight: '500',
-  },
-  songGenre: {
-    fontSize: 14,
-    color: '#8420d0',
-    fontWeight: '500',
-  },
+  if (isLoading) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: '#121212', justifyContent: 'center', alignItems: 'center' }}>
+        <StatusBar style="light" />
+        <ActivityIndicator size="large" color="#8420d0" />
+        <Text style={{ color: '#FFFFFF', marginTop: 16, fontSize: 16 }}>Initializing...</Text>
+      </SafeAreaView>
+    );
+  }
 
-  // Common styles
-  loadingContainer: {
-    alignItems: 'center',
-    paddingVertical: 40,
-  },
-  loadingText: {
-    color: '#B3B3B3',
-    marginTop: 10,
-    fontSize: 14,
-  },
-  errorContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 30,
-  },
-  errorText: {
-    color: '#FF453A',
-    fontSize: 14,
-    marginLeft: 8,
-    textAlign: 'center',
-  },
-  emptyContainer: {
-    alignItems: 'center',
-    paddingVertical: 40,
-  },
-  emptyText: {
-    color: '#B3B3B3',
-    fontSize: 16,
-    fontWeight: '600',
-    marginTop: 10,
-  },
-  emptySubtext: {
-    color: '#666',
-    fontSize: 12,
-    marginTop: 5,
-  },
+  return <App />;
+}
 
-  // Detect screen styles
-  listenButtonWrapper: {
-    width: 280,
-    height: 280,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  listenButton: {
-    width: 220,
-    height: 220,
-    borderRadius: 110,
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4.65,
-    elevation: 8,
-    overflow: 'hidden',
-  },
-  idleButton: {
-    backgroundColor: '#8420d0',
-  },
-  recordingButton: {
-    backgroundColor: '#FF453A',
-  },
-  ripple: {
-    position: 'absolute',
-    width: 220,
-    height: 220,
-    borderRadius: 110,
-    backgroundColor: 'rgba(255, 69, 58, 0.5)',
-  },
-  statusLabel: {
-    fontSize: 16,
-    fontWeight: '500',
-    color: '#B3B3B3',
-    marginBottom: 20,
-    textAlign: 'center',
-  },
-  resultsPage: {
-    flex: 1,
-    width: '100%',
-  },
-  resultsScrollView: {
-    flex: 1,
-    width: '100%',
-    paddingHorizontal: 20,
-  },
-  analysisContainer: {
-    width: '100%',
-    alignItems: 'center',
-    paddingBottom: 20,
-  },
-  mainKeyContainer: {
-    width: '100%',
-    backgroundColor: '#282828',
-    borderRadius: 12,
-    padding: 20,
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  mainKeyValue: {
-    fontSize: 48,
-    fontWeight: 'bold',
-    color: '#8420d0',
-    marginVertical: 5,
-  },
-  relativeKeyText: {
-    fontSize: 16,
-    color: '#B3B3B3',
-    fontWeight: '600',
-    marginTop: 5,
-  },
-  secondaryResultsContainer: {
-    flexDirection: 'row',
-    width: '100%',
-    marginBottom: 10,
-  },
-  resultBox: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#282828',
-    padding: 20,
-    borderRadius: 12,
-    marginHorizontal: 5,
-    flex: 1,
-  },
-  resultLabel: {
-    fontSize: 14,
-    color: '#B3B3B3',
-    fontWeight: '600',
-    marginBottom: 8,
-  },
-  resultValue: {
-    fontSize: 36,
-    color: '#FFFFFF',
-    fontWeight: 'bold',
-  },
-  alternativeKeyText: {
-    fontSize: 16,
-    color: '#FFFFFF',
-    fontWeight: '600',
-    textAlign: 'center',
-  },
-  keyboardContainer: {
-    width: '100%',
-    height: 80,
-    flexDirection: 'row',
-    position: 'relative',
-    marginTop: 15,
-  },
-  whiteKey: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#000',
-    borderRadius: 4,
-    margin: 1,
-    justifyContent: 'flex-end',
-    alignItems: 'center',
-    paddingBottom: 5,
-  },
-  blackKeysContainer: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: '60%',
-    flexDirection: 'row',
-    paddingHorizontal: '7.14%',
-  },
-  blackKeyWrapper: {
-    flex: 1,
-    alignItems: 'center',
-  },
-  blackKey: {
-    width: '70%',
-    height: '100%',
-    backgroundColor: '#000000',
-    borderWidth: 1,
-    borderColor: '#000',
-    borderRadius: 4,
-    zIndex: 1,
-    justifyContent: 'flex-end',
-    alignItems: 'center',
-    paddingBottom: 2,
-  },
-  blackKeyText: {
-    color: 'white',
-    fontWeight: 'bold',
-    fontSize: 10,
-  },
-  highlightedKey: {
-    backgroundColor: '#8420d0',
-  },
-  keyText: {
-    color: '#000',
-    fontWeight: 'bold',
-    fontSize: 10,
-  },
-  detectedSongContainer: {
-    width: '100%',
-    marginTop: 10,
-  },
-  suggestionsTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-    marginBottom: 10,
-    paddingLeft: 10,
-  },
-  suggestionsSubtitle: {
-    fontSize: 14,
-    color: '#B3B3B3',
-    marginBottom: 10,
-    paddingLeft: 10,
-  },
-  suggestionCard: {
-    backgroundColor: '#282828',
-    borderRadius: 8,
-    padding: 15,
-    marginBottom: 10,
-  },
-  recognizedCard: {
-    backgroundColor: '#8420d0',
-    padding: 10,
-  },
-  recognizedCardContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  albumArt: {
-    width: 60,
-    height: 60,
-    borderRadius: 6,
-    marginRight: 15,
-  },
-  albumArtPlaceholder: {
-    width: 60,
-    height: 60,
-    borderRadius: 6,
-    marginRight: 15,
-    backgroundColor: '#333333',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  recognizedSongInfo: {
-    flex: 1,
-  },
-  albumInfo: {
-    fontSize: 12,
-    color: '#DDDDDD',
-    marginTop: 4,
-  },
-  suggestionTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-  },
-  suggestionArtist: {
-    fontSize: 14,
-    color: '#B3B3B3',
-    marginTop: 4,
-  },
-  chordProgressionCard: {
-    backgroundColor: '#1C1C1C',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 8,
-    alignItems: 'center',
-  },
-  chordProgressionText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
-    fontFamily: 'monospace',
-  },
-  waveformContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    height: '60%',
-    width: '100%',
-  },
-  waveformBar: {
-    width: 10,
-    backgroundColor: 'white',
-    marginHorizontal: 4,
-    borderRadius: 5,
-    height: '80%',
-  },
-  detectAnotherButton: {
-    backgroundColor: '#8420d0',
-    paddingVertical: 15,
-    paddingHorizontal: 30,
-    borderRadius: 30,
-    margin: 20,
-    alignItems: 'center',
-  },
-  detectAnotherButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  confidenceText: {
-    fontSize: 16,
-    fontWeight: '600',
-    marginTop: 4,
-    marginBottom: 4,
-  },
-  // New Session Screen Styles
-  inputGroup: {
-    width: '100%',
-    marginBottom: 20,
-  },
-  inputLabel: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
-    marginBottom: 8,
-  },
-  artistInfoCard: {
-    backgroundColor: '#282828',
-    borderRadius: 12,
-    padding: 15,
-    width: '100%',
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  artistImage: {
-    width: 80,
-    height: 80,
-    borderRadius: 8,
-    marginRight: 15,
-  },
-  artistInfoText: {
-    flex: 1,
-  },
-  artistName: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-  },
-  artistSubtext: {
-    fontSize: 14,
-    color: '#B3B3B3',
-    marginTop: 4,
-  },
-  dropboxButton: {
-    backgroundColor: '#F7F7F7',
-    borderRadius: 8,
-    padding: 15,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  dropboxButtonLinked: {
-    backgroundColor: '#0061FF',
-    borderRadius: 8,
-    padding: 15,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  dropboxButtonText: {
-    color: '#0061FF',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  dropboxButtonTextLinked: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  primaryButton: {
-    backgroundColor: '#8420d0',
-    paddingVertical: 15,
-    borderRadius: 30,
-    width: '100%',
-    alignItems: 'center',
-    marginTop: 10,
-  },
-  primaryButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-   modalContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-  },
-  modalContent: {
-    backgroundColor: '#282828',
-    borderRadius: 12,
-    padding: 20,
-    width: '85%',
-    maxHeight: '70%',
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-    marginBottom: 20,
-    textAlign: 'center',
-  },
-  folderItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 15,
-    borderBottomWidth: 1,
-    borderBottomColor: '#404040',
-  },
-  folderName: {
-    color: '#FFFFFF',
-    fontSize: 16,
-  },
-  closeButton: {
-    backgroundColor: '#FF453A',
-    borderRadius: 8,
-    padding: 15,
-    marginTop: 20,
-    alignItems: 'center',
-  },
-  closeButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  redirectUriText: {
-      color: '#B3B3B3',
-      marginTop: 20,
-      fontSize: 14,
-      textAlign: 'center',
-  },
-  redirectUriInput: {
-      backgroundColor: '#282828',
-      color: '#FFFFFF',
-      width: '100%',
-      borderRadius: 8,
-      padding: 10,
-      fontSize: 12,
-      marginTop: 10,
-      textAlign: 'center',
-  },
-  folderNavBar: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      alignItems: 'center',
-      paddingBottom: 10,
-      marginBottom: 10,
-      borderBottomWidth: 1,
-      borderBottomColor: '#404040',
-  },
-  currentPathText: {
-      color: '#FFFFFF',
-      fontSize: 16,
-      flex: 1,
-      textAlign: 'center',
-      marginHorizontal: 10,
-  },
-  selectFolderButton: {
-      backgroundColor: '#1DB954',
-      paddingHorizontal: 12,
-      paddingVertical: 6,
-      borderRadius: 6,
-  },
-  selectFolderButtonText: {
-      color: '#FFFFFF',
-      fontWeight: 'bold',
-  },
-  statsText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    marginVertical: 4,
-  },
-  songStats: {
-      marginLeft: 'auto',
-      alignItems: 'flex-end',
-  },
-  selectedFolderDisplay: {
-      backgroundColor: '#1C1C1C',
-      borderRadius: 8,
-      padding: 15,
-      marginBottom: 20,
-      width: '100%',
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-  },
-  selectedFolderText: {
-      color: '#FFFFFF',
-      fontSize: 16,
-      flex: 1, // Allow text to take up space
-      marginRight: 10, // Space from button
-  },
-  browseButton: {
-      backgroundColor: '#8420d0', // Use your accent color
-      paddingVertical: 8,
-      paddingHorizontal: 12,
-      borderRadius: 20,
-  },
-  browseButtonText: {
-      color: '#FFFFFF',
-      fontSize: 14,
-      fontWeight: 'bold',
-  },
-  
-});
+export default AuthenticatedApp;
 
-// Compact picker styles
-const compactPickerStyles = StyleSheet.create({
-  inputIOS: {
-    fontSize: 14,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderWidth: 1,
-    borderColor: '#404040',
-    borderRadius: 6,
-    color: '#FFFFFF',
-    backgroundColor: '#282828',
-    paddingRight: 25,
-  },
-  inputAndroid: {
-    fontSize: 14,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderWidth: 1,
-    borderColor: '#404040',
-    borderRadius: 6,
-    color: '#FFFFFF',
-    backgroundColor: '#282828',
-    paddingRight: 25,
-  },
-});
