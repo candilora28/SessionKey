@@ -37,17 +37,27 @@ CORS(app)
 
 # --- Firebase Initialization ---
 try:
-    # Get the path to your key file from the environment variable
-    cred_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
+    # Try to get Firebase credentials from environment variable (JSON content)
+    firebase_json = os.getenv('FIREBASE_SERVICE_ACCOUNT_JSON')
     
-    if not cred_path:
-        raise ValueError("GOOGLE_APPLICATION_CREDENTIALS environment variable not set.")
-
-    # Initialize the Firebase Admin SDK using the path
-    cred = credentials.Certificate(cred_path)
-    firebase_admin.initialize_app(cred)
-    db = firestore.client()
-    print("Successfully connected to Firebase.")
+    if firebase_json:
+        # Parse the JSON content from environment variable
+        import json
+        firebase_config = json.loads(firebase_json)
+        cred = credentials.Certificate(firebase_config)
+        firebase_admin.initialize_app(cred)
+        db = firestore.client()
+        print("Successfully connected to Firebase using JSON from environment variable.")
+    else:
+        # Fallback to file path method
+        cred_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
+        if cred_path:
+            cred = credentials.Certificate(cred_path)
+            firebase_admin.initialize_app(cred)
+            db = firestore.client()
+            print("Successfully connected to Firebase using file path.")
+        else:
+            raise ValueError("Neither FIREBASE_SERVICE_ACCOUNT_JSON nor GOOGLE_APPLICATION_CREDENTIALS environment variable is set.")
 
 except Exception as e:
     print(f"!!! FIREBASE CONNECTION FAILED: {e} !!!")
