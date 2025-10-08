@@ -2,10 +2,10 @@
 nixPkgs = ['python39', 'pip']
 
 [phases.install]
-cmds = ['cd KeyFinder-Server && pip install -r requirements.txt']
+cmds = ['pip install -r KeyFinder-Server/requirements.txt']
 
 [phases.build]
 cmds = ['echo "Build phase complete"']
 
 [start]
-cmd = 'cd KeyFinder-Server && python server.py'
+cmd = 'python main.py'

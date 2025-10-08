@@ -1,0 +1,11 @@
+README.md
+setup.py
+./windows/win64/python3/pyacrcloud.egg-info/PKG-INFO
+./windows/win64/python3/pyacrcloud.egg-info/SOURCES.txt
+./windows/win64/python3/pyacrcloud.egg-info/dependency_links.txt
+./windows/win64/python3/pyacrcloud.egg-info/not-zip-safe
+./windows/win64/python3/pyacrcloud.egg-info/top_level.txt
+windows/win64/python3/acrcloud/__init__.py
+windows/win64/python3/acrcloud/acrcloud_extr_tool.pyd
+windows/win64/python3/acrcloud/recognizer.py
+windows/win64/python3/pyacrcloud.egg-info/SOURCES.txt
