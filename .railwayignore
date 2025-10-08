@@ -1,0 +1,6 @@
+# Ignore React Native app - only deploy the Python server
+KeyFinder-App/
+node_modules/
+*.log
+.DS_Store
+Thumbs.db
