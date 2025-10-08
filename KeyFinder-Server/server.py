@@ -1171,7 +1171,7 @@ def get_available_genres():
         })
 
 if __name__ == '__main__':
-    print("🎵 Music Producer Companion Server Starting...")
+    print("🎵 Music Producer Companion Server Starting... (Railway Deploy)")
     # Count songs in comprehensive database
     metadata_files = [f for f in os.listdir('.') if f.startswith('music_database_final') and f.endswith('.json')]
     if metadata_files:
