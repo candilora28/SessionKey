@@ -19,6 +19,13 @@ try:
 except ImportError:
     print("Warning: ACRCloud SDK not available. Song identification will be disabled.")
     ACRCloudRecognizer = None
+
+try:
+    import ffmpeg  # type: ignore # Package is ffmpeg-python, imported as ffmpeg
+except ImportError:
+    print("Warning: ffmpeg-python not available. Audio conversion will be disabled.")
+    ffmpeg = None
+
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -520,7 +527,6 @@ def preprocess_audio_file(file_path):
     """Convert audio file to a format that soundfile can handle efficiently."""
     import os
     import tempfile
-    import ffmpeg
     
     # Get file extension
     _, ext = os.path.splitext(file_path)
@@ -532,6 +538,10 @@ def preprocess_audio_file(file_path):
     
     # For problematic formats like .m4m, convert to temporary wav file
     if ext in ['.m4m', '.m4a', '.mp4', '.aac']:
+        if not ffmpeg:
+            print(f"Warning: Cannot convert {ext} file - ffmpeg-python not available")
+            return file_path
+            
         try:
             temp_wav = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
             temp_wav.close()
