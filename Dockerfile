@@ -19,13 +19,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy server code
 COPY KeyFinder-Server/ .
 
-# Set environment variables
+# Set environment variables (secrets will be injected by Railway at runtime)
 ENV PYTHONPATH=/app
 ENV FLASK_APP=server.py
 ENV FLASK_ENV=production
 
-# Expose port (Railway will set PORT automatically)
-EXPOSE $PORT
+# Expose port
+EXPOSE 5000
 
-# Start the server
+# Start the server (Railway will inject environment variables at runtime)
 CMD ["python", "server.py"]
