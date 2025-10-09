@@ -52,8 +52,9 @@ const ARTISTS_BY_KEY_URL = `${SERVER_URL}/get_artists_by_key`;
 const DROPBOX_APP_KEY = '1qfdizul5aujvge';
 const redirectUri = AuthSession.makeRedirectUri({ useProxy: true });
 
+// Firebase config - API key moved to environment variables for security
 const firebaseConfig = {
-  apiKey: "AIzaSyDxol2vFJreQ3NEfNguCPaU6CrIhVCRVko",
+  apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY || "your-api-key-here",
   authDomain: "keyfinder-prod-app.firebaseapp.com",
   projectId: "keyfinder-prod-app",
   storageBucket: "keyfinder-prod-app.firebasestorage.app",
